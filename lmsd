@@ -1,0 +1,28 @@
+#!/bin/bash
+
+# Get the directory where this script is located
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Change to the script directory
+cd "$SCRIPT_DIR"
+
+# Check if virtual environment exists, if not create it
+if [ ! -d ".venv" ]; then
+    echo "Creating virtual environment..."
+    python3 -m venv .venv
+fi
+
+# Activate the virtual environment
+source .venv/bin/activate
+
+# Check if required packages are installed
+if ! pip show torch diffusers pillow requests > /dev/null 2>&1; then
+    echo "Installing required packages..."
+    pip install torch diffusers pillow requests
+fi
+
+# Run the Python script with all arguments passed through
+python3 image_generator.py "$@"
+
+# Deactivate the virtual environment
+deactivate 
