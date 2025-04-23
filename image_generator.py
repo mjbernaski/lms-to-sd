@@ -234,6 +234,10 @@ class ImageGenerator:
         print(f"- Device: {self.device.upper()}")
         print(f"- Seed: {self.current_seed}")
         
+        # Remove "Positive" from the beginning of the prompt if it exists
+        if prompt.lower().startswith("positive"):
+            prompt = prompt[8:].strip()
+        
         # Use specified dimensions or default to 1024x1024 (SDXL's optimal resolution)
         width = dimensions[0] if dimensions else 1024
         height = dimensions[1] if dimensions else 1024
