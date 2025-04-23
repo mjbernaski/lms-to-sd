@@ -1,0 +1,8 @@
+torch>=2.6.0
+diffusers>=0.24.0
+transformers>=4.36.0
+pillow>=10.0.0
+requests>=2.31.0
+psutil>=5.9.0
+accelerate>=0.25.0
+safetensors>=0.4.1 
