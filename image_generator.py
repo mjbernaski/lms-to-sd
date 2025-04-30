@@ -1,4 +1,4 @@
-/import requests
+import requests
 import json
 from diffusers import StableDiffusionXLPipeline, DPMSolverMultistepScheduler, EulerDiscreteScheduler, LMSDiscreteScheduler, PNDMScheduler
 import torch
@@ -137,17 +137,11 @@ class ImageGenerator:
         # Add /nothink to prevent thinking output
         user_input = f"/nothink {user_input}"
         
-        # Reset conversation history with simplified prompt
-        self.conversation_history = [
-            {
-                "role": "system",
-                "content": "You are a prompt generator. Output exactly two lines:\nLine 1: [description]\nLine 2: Negative: [negative traits]"
-            },
-            {
-                "role": "user",
-                "content": user_input
-            }
-        ]
+        # Add the user's input to the conversation history instead of resetting it
+        self.conversation_history.append({
+            "role": "user",
+            "content": user_input
+        })
         
         data = {
             "messages": self.conversation_history,
@@ -160,6 +154,12 @@ class ImageGenerator:
             if response.status_code == 200:
                 response_json = response.json()
                 message = response_json["choices"][0]["message"]
+                
+                # Add the assistant's response to the conversation history
+                self.conversation_history.append({
+                    "role": "assistant",
+                    "content": message.get("content", "")
+                })
                 
                 # Get content from the response
                 content_parts = message.get("content", "").strip().split("\n")
