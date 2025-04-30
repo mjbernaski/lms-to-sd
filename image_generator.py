@@ -1,4 +1,4 @@
-import requests
+/import requests
 import json
 from diffusers import StableDiffusionXLPipeline, DPMSolverMultistepScheduler, EulerDiscreteScheduler, LMSDiscreteScheduler, PNDMScheduler
 import torch
@@ -134,59 +134,75 @@ class ImageGenerator:
             # Remove the dimension specification from the input
             user_input = re.sub(r'\[?(\d+)x(\d+)\]?', '', user_input).strip()
         
-        # Add user input to conversation history with SD version info
-        prompt_request = f"""Create a detailed but concise prompt for Stable Diffusion XL based on this idea: {user_input}. 
-        Keep it under 60 words and focus on visual elements.
-        Also provide a negative prompt to avoid common issues like distorted faces, blurry images, or poor composition.
-        Format your response as two lines:
-        Line 1: The positive prompt (include all relevant details from previous prompts)
-        Line 2: The negative prompt starting with "Negative: "
-        """
-        if dimensions:
-            prompt_request += f" The image will be {dimensions[0]}x{dimensions[1]} pixels."
+        # Add /nothink to prevent thinking output
+        user_input = f"/nothink {user_input}"
         
-        self.conversation_history.append({"role": "user", "content": prompt_request})
+        # Reset conversation history with simplified prompt
+        self.conversation_history = [
+            {
+                "role": "system",
+                "content": "You are a prompt generator. Output exactly two lines:\nLine 1: [description]\nLine 2: Negative: [negative traits]"
+            },
+            {
+                "role": "user",
+                "content": user_input
+            }
+        ]
         
         data = {
             "messages": self.conversation_history,
             "temperature": 0.7,
-            "max_tokens": 120  # Increased to accommodate both prompts
+            "max_tokens": 120
         }
         
         try:
             response = requests.post(self.lmstudio_url, headers=headers, json=data)
             if response.status_code == 200:
-                full_response = response.json()["choices"][0]["message"]["content"]
-                # Add assistant's response to conversation history
-                self.conversation_history.append({"role": "assistant", "content": full_response})
+                response_json = response.json()
+                message = response_json["choices"][0]["message"]
                 
-                # Split the response into positive and negative prompts
-                lines = full_response.split('\n')
-                prompt = lines[0].strip()
+                # Get content from the response
+                content_parts = message.get("content", "").strip().split("\n")
+                content_parts = [p.strip() for p in content_parts if p.strip()]
+                
+                # Extract prompt and negative prompt
+                prompt = None
                 negative_prompt = None
                 
-                # Extract negative prompt if present
-                for line in lines[1:]:
-                    if line.strip().startswith("Negative:"):
-                        negative_prompt = line.replace("Negative:", "").strip()
+                # Look for the description/prompt
+                for part in content_parts:
+                    if part.startswith("Description:"):
+                        prompt = part.replace("Description:", "").strip()
+                        break
+                    elif not part.startswith("Negative:"):
+                        prompt = part.strip()
                         break
                 
-                # Clean up the prompt - remove "Line 1" and other prefixes
-                prompt = prompt.replace("Line 1:", "").strip()
-                prompt = prompt.replace("Line 1", "").strip()
-                prompt = prompt.replace("Here's a Stable Diffusion XL prompt for", "").strip()
-                prompt = prompt.replace("Here's a prompt building on the previous one, aiming for", "").strip()
-                prompt = prompt.replace(":", "").strip()
+                # Look for negative prompt
+                for part in content_parts:
+                    if part.startswith("Negative:"):
+                        negative_prompt = part.replace("Negative:", "").strip()
+                        break
                 
-                # Ensure the prompt isn't too long for Stable Diffusion
-                if len(prompt.split()) > 77:  # CLIP token limit
+                # If no prompt found, use original input
+                if not prompt:
+                    prompt = user_input.replace("/nothink ", "")
+                
+                # Ensure the prompt isn't too long
+                if len(prompt.split()) > 77:
                     prompt = " ".join(prompt.split()[:77])
+                
+                print(f"\nGenerated prompt: {prompt}")
+                if negative_prompt:
+                    print(f"Negative prompt: {negative_prompt}")
+                
                 return prompt, dimensions, negative_prompt
             else:
-                raise Exception(f"Error from LMStudio: {response.status_code}")
+                print(f"\nError from LM Studio: {response.status_code}")
+                return user_input.replace("/nothink ", ""), dimensions, None
         except Exception as e:
-            print(f"Error getting prompt from LMStudio: {str(e)}")
-            return user_input, dimensions, None  # Fallback to original input if LMStudio fails
+            print(f"\nError getting prompt from LM Studio: {str(e)}")
+            return user_input.replace("/nothink ", ""), dimensions, None
 
     def reset_conversation(self):
         """Reset the conversation history and generate a new seed"""
