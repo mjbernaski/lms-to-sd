@@ -1,6 +1,6 @@
 import requests
 import json
-from diffusers import StableDiffusionXLPipeline, DPMSolverMultistepScheduler, EulerDiscreteScheduler, LMSDiscreteScheduler, PNDMScheduler
+from diffusers import StableDiffusionXLPipeline, DPMSolverMultistepScheduler, EulerDiscreteScheduler, LMSDiscreteScheduler, PNDMScheduler, StableDiffusionXLImg2ImgPipeline, StableDiffusionXLRefinerPipeline
 import torch
 from PIL import Image
 import io
@@ -59,6 +59,16 @@ class ImageGenerator:
                 use_safetensors=True
             )
             print("Pipeline loaded successfully")
+
+            # Load the refiner pipeline
+            print("Loading SDXL Refiner pipeline...")
+            self.refiner = StableDiffusionXLImg2ImgPipeline.from_pretrained(
+                "stabilityai/stable-diffusion-xl-refiner-1.0",
+                torch_dtype=torch.float32,
+                variant="fp16",
+                use_safetensors=True
+            )
+            print("Refiner loaded successfully")
             
             # Determine the best device to use
             if torch.backends.mps.is_available():
@@ -242,7 +252,7 @@ class ImageGenerator:
         return f"CPU: {cpu_percent}%"
 
     def generate_image(self, prompt, dimensions=None, negative_prompt=None, num_inference_steps=50, guidance_scale=7.5):
-        """Generate an image using Stable Diffusion XL"""
+        """Generate an image using Stable Diffusion XL and refine it"""
         print("\nGenerating image... This may take a few minutes...")
         print(f"\nParameters:")
         print(f"- Steps: {num_inference_steps}")
@@ -324,7 +334,17 @@ class ImageGenerator:
                 height=height,
                 width=width,
                 generator=torch.Generator(device=self.device).manual_seed(self.current_seed),
-                callback_on_step_end=callback_on_step_end
+                output_type="latent"  # <-- get latents for refiner
+            ).images[0]
+            
+            # Refine the image
+            print("Refining image for better details...")
+            refined_image = self.refiner(
+                image=image,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                num_inference_steps=30,  # Fewer steps for refiner is typical
+                guidance_scale=guidance_scale,
             ).images[0]
             
             # Calculate duration
@@ -336,10 +356,10 @@ class ImageGenerator:
             print(f"\nGeneration complete!")
             print(f"Time taken: {duration:.1f} seconds")
             print(f"Resource usage: {resource_usage}")
-            print(f"Image dimensions: {image.size[0]}x{image.size[1]} pixels")
+            print(f"Image dimensions: {refined_image.size[0]}x{refined_image.size[1]} pixels")
             print(f"Intermediate images saved in: {generation_dir}")
             
-            return image
+            return refined_image
         except Exception as e:
             print(f"Error generating image: {str(e)}")
             return None
