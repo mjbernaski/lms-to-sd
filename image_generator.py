@@ -47,8 +47,16 @@ class ImageGenerator:
             self.num_steps = 50
             print(f"\nInitial number of steps: {self.num_steps}")
             
+            # Initialize default and current dimensions
+            self.default_dimensions = (512, 512)
+            self.current_dimensions = self.default_dimensions
+            print(f"Initial dimensions: {self.current_dimensions[0]}x{self.current_dimensions[1]}")
+            
             # Initialize detail mode
             self.show_detail = False
+            
+            # Initialize idea history
+            self.idea_history = []
             
             print("\nLoading Stable Diffusion pipeline...")
             # Initialize Stable Diffusion XL pipeline
@@ -85,7 +93,7 @@ class ImageGenerator:
                     self.device = "cpu"
             elif torch.cuda.is_available():
                 print("\nUsing CUDA GPU for inference")
-                self.pipeline = self.pipeline.to("cuda")
+                self.pipeline = self.pipeline.to("cudlmsd")
                 self.device = "cuda"
             else:
                 print("\nUsing CPU for inference")
@@ -128,29 +136,31 @@ class ImageGenerator:
             raise
 
     def get_prompt_from_lmstudio(self, user_input):
-        """Get an enhanced prompt from LMStudio"""
+        """Get an enhanced prompt from LMStudio, update dimensions if specified."""
         print("\nGetting creative prompt from LMStudio...")
         headers = {
             "Content-Type": "application/json"
         }
         
         # Check if user specified dimensions in input
-        dimensions = None
+        original_input_for_lm = user_input # Keep original for LMStudio call
         dimension_match = re.search(r'\[?(\d+)x(\d+)\]?', user_input)
         if dimension_match:
             width = int(dimension_match.group(1))
             height = int(dimension_match.group(2))
-            dimensions = (width, height)
-            # Remove the dimension specification from the input
-            user_input = re.sub(r'\[?(\d+)x(\d+)\]?', '', user_input).strip()
+            # Update the persistent dimensions for the session
+            self.current_dimensions = (width, height)
+            print(f"Dimensions updated to: {self.current_dimensions[0]}x{self.current_dimensions[1]}")
+            # Remove the dimension specification from the input passed to LM Studio
+            original_input_for_lm = re.sub(r'\[?(\d+)x(\d+)\]?', '', user_input).strip()
         
         # Add /nothink to prevent thinking output
-        user_input = f"/nothink {user_input}"
+        lm_studio_input = f"/nothink {original_input_for_lm}"
         
-        # Add the user's input to the conversation history instead of resetting it
+        # Add the user's input (without dimensions) to the conversation history
         self.conversation_history.append({
             "role": "user",
-            "content": user_input
+            "content": lm_studio_input
         })
         
         data = {
@@ -158,6 +168,9 @@ class ImageGenerator:
             "temperature": 0.7,
             "max_tokens": 120
         }
+        
+        # Define junk tokens to filter out
+        JUNK_TOKENS = {"<think>", "<thinking>", "think", "thinking", "", "<|im_start|>", "<|im_end|>", "</think>"}
         
         try:
             response = requests.post(self.lmstudio_url, headers=headers, json=data)
@@ -179,8 +192,11 @@ class ImageGenerator:
                 prompt = None
                 negative_prompt = None
                 
-                # Look for the description/prompt
+                # Look for the description/prompt, skipping junk tokens
                 for part in content_parts:
+                    part_lower = part.lower().strip()
+                    if part_lower in JUNK_TOKENS:
+                        continue  # skip junk
                     if part.startswith("Description:"):
                         prompt = part.replace("Description:", "").strip()
                         break
@@ -194,9 +210,9 @@ class ImageGenerator:
                         negative_prompt = part.replace("Negative:", "").strip()
                         break
                 
-                # If no prompt found, use original input
-                if not prompt:
-                    prompt = user_input.replace("/nothink ", "")
+                # If no prompt found or it's junk, use original input
+                if not prompt or prompt.lower().strip() in JUNK_TOKENS:
+                    prompt = original_input_for_lm.replace("/nothink ", "")
                 
                 # Ensure the prompt isn't too long
                 if len(prompt.split()) > 77:
@@ -206,13 +222,16 @@ class ImageGenerator:
                 if negative_prompt:
                     print(f"Negative prompt: {negative_prompt}")
                 
-                return prompt, dimensions, negative_prompt
+                # Return prompts, dimensions are handled by the class state
+                return prompt, negative_prompt
             else:
                 print(f"\nError from LM Studio: {response.status_code}")
-                return user_input.replace("/nothink ", ""), dimensions, None
+                # Fallback to original input (without /nothink)
+                return original_input_for_lm, None
         except Exception as e:
             print(f"\nError getting prompt from LM Studio: {str(e)}")
-            return user_input.replace("/nothink ", ""), dimensions, None
+            # Fallback to original input (without /nothink)
+            return original_input_for_lm, None
 
     def reset_conversation(self):
         """Reset the conversation history and generate a new seed"""
@@ -238,6 +257,9 @@ class ImageGenerator:
         self.current_seed = torch.randint(0, 2**32 - 1, (1,)).item()
         print("\nConversation history has been reset.")
         print(f"New seed: {self.current_seed}")
+        self.idea_history = [] # Reset idea history
+        self.current_dimensions = self.default_dimensions # Reset dimensions to default
+        print(f"Dimensions reset to default: {self.current_dimensions[0]}x{self.current_dimensions[1]}")
 
     def get_resource_usage(self):
         """Get current CPU and GPU usage"""
@@ -251,26 +273,29 @@ class ImageGenerator:
             return f"CPU: {cpu_percent}% | GPU: {gpu_percent}% ({gpu_memory:.1f}MB)"
         return f"CPU: {cpu_percent}%"
 
-    def generate_image(self, prompt, dimensions=None, negative_prompt=None, num_inference_steps=50, guidance_scale=7.5):
-        """Generate an image using Stable Diffusion XL and refine it"""
+    def generate_image(self, original_idea: str, prompt, negative_prompt=None, num_inference_steps=50, guidance_scale=7.5):
+        """Generate an image using Stable Diffusion XL and refine it, using current dimensions."""
+        # Add the original idea to the history for this session
+        self.idea_history.append(original_idea)
+        
         print("\nGenerating image... This may take a few minutes...")
         print(f"\nParameters:")
+        print(f"- Idea Chain: {' -> '.join(self.idea_history)}") # Display the chain of ideas
         print(f"- Steps: {num_inference_steps}")
         print(f"- Guidance Scale: {guidance_scale}")
         print(f"- Device: {self.device.upper()}")
         print(f"- Seed: {self.current_seed}")
         
+        # Use current dimensions stored in the class instance
+        width, height = self.current_dimensions
+        print(f"- Dimensions: {width}x{height} pixels")
+        
         # Remove "Positive" from the beginning of the prompt if it exists
         if prompt.lower().startswith("positive"):
             prompt = prompt[8:].strip()
         
-        # Use specified dimensions or default to 1024x1024 (SDXL's optimal resolution)
-        width = dimensions[0] if dimensions else 1024
-        height = dimensions[1] if dimensions else 1024
-        print(f"- Dimensions: {width}x{height} pixels")
-        print(f"- Prompt: {prompt}")
-        if negative_prompt:
-            print(f"- Negative Prompt: {negative_prompt}")
+        # Use specified negative prompt or default to "Negative: "
+        negative_prompt = negative_prompt or "Negative: "
         
         try:
             # Record start time
@@ -442,14 +467,15 @@ def main():
     # If --idea is provided, generate one image and exit
     if args.idea:
         try:
-            enhanced_prompt, dimensions, negative_prompt = generator.get_prompt_from_lmstudio(args.idea)
+            # Get prompts, dimensions are handled internally now
+            enhanced_prompt, negative_prompt = generator.get_prompt_from_lmstudio(args.idea)
             print(f"\nGenerated prompt: {enhanced_prompt}")
             if negative_prompt:
                 print(f"Negative prompt: {negative_prompt}")
-            if dimensions:
-                print(f"Requested dimensions: {dimensions[0]}x{dimensions[1]} pixels")
+            # Dimensions are no longer returned/needed here
             
-            image = generator.generate_image(enhanced_prompt, dimensions, negative_prompt, 
+            # Generate image using stored dimensions
+            image = generator.generate_image(args.idea, enhanced_prompt, negative_prompt, 
                                           num_inference_steps=generator.num_steps,
                                           guidance_scale=guidance_scale)
             generator.save_image(image, enhanced_prompt)
@@ -466,9 +492,9 @@ def main():
     
     while True:
         print("\nEnter your image idea (or 'quit' to exit):")
-        user_input = input("> ")
+        user_input = input("> ").strip() # Get raw user input
         
-        if user_input.lower() == 'quit' or user_input.lower() == '/quit':
+        if user_input.lower() in {'quit', '/quit'}:
             break
         elif user_input.lower() == '/reset':
             generator.reset_conversation()
@@ -499,17 +525,22 @@ def main():
                 print("Invalid guidance scale. Usage: /guidance <number>")
                 continue
             
+        # If it's not a command, treat it as an idea
+        original_idea_for_generation = user_input
+
         try:
-            enhanced_prompt, dimensions, negative_prompt = generator.get_prompt_from_lmstudio(user_input)
+            # Get prompts, dimensions are handled internally now
+            enhanced_prompt, negative_prompt = generator.get_prompt_from_lmstudio(original_idea_for_generation)
             print(f"\nGenerated prompt: {enhanced_prompt}")
             if negative_prompt:
                 print(f"Negative prompt: {negative_prompt}")
-            if dimensions:
-                print(f"Requested dimensions: {dimensions[0]}x{dimensions[1]} pixels")
-            
-            image = generator.generate_image(enhanced_prompt, dimensions, negative_prompt, 
-                                          num_inference_steps=generator.num_steps,
-                                          guidance_scale=guidance_scale)
+            # Dimensions are no longer returned/needed here
+
+            # Pass the original idea to generate_image (dimensions are handled by class state)
+            image = generator.generate_image(original_idea_for_generation, 
+                                             enhanced_prompt, negative_prompt, 
+                                             num_inference_steps=generator.num_steps,
+                                             guidance_scale=guidance_scale)
             generator.save_image(image, enhanced_prompt)
             
         except Exception as e:

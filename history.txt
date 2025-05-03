@@ -1,0 +1,16 @@
+  992  ls
+  993  cd ..
+  994  ls
+  995  cd Developer
+  996  ls
+  997  cd LMtoSD
+  998  ls
+  999  cd ..
+ 1000  ls
+ 1001  /usr/bin/python3 /Users/michaelbernaski/.cursor/extensions/ms-python.python-2024.12.3-darwin-arm64/python_files/printEnvVariablesToFile.py /Users/michaelbernaski/.cursor/extensions/ms-python.python-2024.12.3-darwin-arm64/python_files/deactivate/zsh/envVars.txt
+ 1002  python composite_images.py /Users/michaelbernaski/Developer/LMtoSD/outputs/generation_20250427_174854/intermediate
+ 1003  open /Users/michaelbernaski/Developer/LMtoSD/outputs/generation_20250427_174854/intermediate/composite.png
+ 1004  ls
+ 1005  python intermediate.py /Users/michaelbernaski/Developer/LMtoSD/outputs/generation_20250427_174854
+ 1006  /usr/bin/python3 /Users/michaelbernaski/.cursor/extensions/ms-python.python-2024.12.3-darwin-arm64/python_files/printEnvVariablesToFile.py /Users/michaelbernaski/.cursor/extensions/ms-python.python-2024.12.3-darwin-arm64/python_files/deactivate/zsh/envVars.txt
+ 1007  /Users/michaelbernaski/Developer/LMtoSD/.venv/bin/python /Users/michaelbernaski/Developer/LMtoSD/image_gen2.py
