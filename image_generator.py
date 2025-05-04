@@ -58,6 +58,9 @@ class ImageGenerator:
             # Initialize idea history
             self.idea_history = []
             
+            # Track if next generation should reuse the previous seed
+            self.use_same_seed_next = False
+            
             print("\nLoading Stable Diffusion pipeline...")
             # Initialize Stable Diffusion XL pipeline
             self.pipeline = StableDiffusionXLPipeline.from_pretrained(
@@ -218,11 +221,6 @@ class ImageGenerator:
                 if len(prompt.split()) > 77:
                     prompt = " ".join(prompt.split()[:77])
                 
-                print(f"\nGenerated prompt: {prompt}")
-                if negative_prompt:
-                    print(f"Negative prompt: {negative_prompt}")
-                
-                # Return prompts, dimensions are handled by the class state
                 return prompt, negative_prompt
             else:
                 print(f"\nError from LM Studio: {response.status_code}")
@@ -275,28 +273,28 @@ class ImageGenerator:
 
     def generate_image(self, original_idea: str, prompt, negative_prompt=None, num_inference_steps=50, guidance_scale=7.5):
         """Generate an image using Stable Diffusion XL and refine it, using current dimensions."""
-        # Add the original idea to the history for this session
         self.idea_history.append(original_idea)
-        
         print("\nGenerating image... This may take a few minutes...")
         print(f"\nParameters:")
-        print(f"- Idea Chain: {' -> '.join(self.idea_history)}") # Display the chain of ideas
+        print(f"- Idea Chain: {' -> '.join(self.idea_history)}")
+        print(f"- Positive Prompt: {prompt}")
+        if negative_prompt:
+            print(f"- Negative Prompt: {negative_prompt}")
         print(f"- Steps: {num_inference_steps}")
         print(f"- Guidance Scale: {guidance_scale}")
         print(f"- Device: {self.device.upper()}")
         print(f"- Seed: {self.current_seed}")
-        
-        # Use current dimensions stored in the class instance
         width, height = self.current_dimensions
         print(f"- Dimensions: {width}x{height} pixels")
-        
+        # Print sampler name if available
+        sampler_name = getattr(self.pipeline.scheduler, '__class__', type('Unknown', (), {})).__name__
+        print(f"- Sampler: {sampler_name}")
+        if self.show_detail:
+            print(f"- Detail Mode: ON (intermediate images every step)")
         # Remove "Positive" from the beginning of the prompt if it exists
         if prompt.lower().startswith("positive"):
             prompt = prompt[8:].strip()
-        
-        # Use specified negative prompt or default to "Negative: "
         negative_prompt = negative_prompt or "Negative: "
-        
         try:
             # Record start time
             start_time = time.time()
@@ -433,6 +431,7 @@ def main():
                       help='Guidance scale (default: 7.5, higher values make the image more closely follow the prompt)')
     parser.add_argument('--detail', action='store_true',
                       help='Show detailed intermediate images throughout the entire generation process')
+    parser.add_argument('--skip-refiner', action='store_true', help='Skip the SDXL refiner step')
     args = parser.parse_args()
 
     print("\nStarting Image Generator...")
@@ -471,7 +470,7 @@ def main():
             enhanced_prompt, negative_prompt = generator.get_prompt_from_lmstudio(args.idea)
             print(f"\nGenerated prompt: {enhanced_prompt}")
             if negative_prompt:
-                print(f"Negative prompt: {negative_prompt}")
+                print(f"\nNegative prompt: {negative_prompt}")
             # Dimensions are no longer returned/needed here
             
             # Generate image using stored dimensions
@@ -488,17 +487,31 @@ def main():
     print("Type '/reset' to reset the conversation history")
     print("Type '/steps <number>' to change the number of inference steps (default: 75)")
     print("Type '/guidance <number>' to change the guidance scale (default: 7.5)")
+    print("Type '/new-seed' to generate a new random seed for the next image")
+    print("Type '/same-seed' to use the same seed for the next image only")
     print("Type '/quit' to exit")
     
+    waiting_for_idea_after_same_seed = False
+
     while True:
-        print("\nEnter your image idea (or 'quit' to exit):")
-        user_input = input("> ").strip() # Get raw user input
-        
+        if not waiting_for_idea_after_same_seed:
+            print("\nEnter your image idea (or 'quit' to exit):")
+        user_input = input("> ").strip()
+
         if user_input.lower() in {'quit', '/quit'}:
             break
         elif user_input.lower() == '/reset':
             generator.reset_conversation()
             print("\nConversation history has been reset. You can start a new conversation.")
+            continue
+        elif user_input.lower() == '/new-seed':
+            generator.current_seed = torch.randint(0, 2**32 - 1, (1,)).item()
+            print(f"\nNew seed set: {generator.current_seed}")
+            continue
+        elif user_input.lower() == '/same-seed':
+            generator.use_same_seed_next = True
+            print("\nThe next image will use the same seed as the previous one.")
+            waiting_for_idea_after_same_seed = True
             continue
         elif user_input.lower().startswith('/steps '):
             try:
@@ -524,25 +537,29 @@ def main():
             except (ValueError, IndexError):
                 print("Invalid guidance scale. Usage: /guidance <number>")
                 continue
-            
+
         # If it's not a command, treat it as an idea
         original_idea_for_generation = user_input
 
+        # Seed logic: new seed unless /same-seed was used
+        if generator.use_same_seed_next:
+            print(f"\nUsing the same seed as previous: {generator.current_seed}")
+            generator.use_same_seed_next = False
+            waiting_for_idea_after_same_seed = False
+        else:
+            generator.current_seed = torch.randint(0, 2**32 - 1, (1,)).item()
+            print(f"\nNew random seed for this generation: {generator.current_seed}")
+
         try:
-            # Get prompts, dimensions are handled internally now
             enhanced_prompt, negative_prompt = generator.get_prompt_from_lmstudio(original_idea_for_generation)
             print(f"\nGenerated prompt: {enhanced_prompt}")
             if negative_prompt:
                 print(f"Negative prompt: {negative_prompt}")
-            # Dimensions are no longer returned/needed here
-
-            # Pass the original idea to generate_image (dimensions are handled by class state)
             image = generator.generate_image(original_idea_for_generation, 
                                              enhanced_prompt, negative_prompt, 
                                              num_inference_steps=generator.num_steps,
                                              guidance_scale=guidance_scale)
             generator.save_image(image, enhanced_prompt)
-            
         except Exception as e:
             print(f"Error: {str(e)}")
             print("Type '/reset' to start a new conversation or 'quit' to exit.")
