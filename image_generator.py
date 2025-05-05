@@ -27,7 +27,7 @@ def debug_torch_device():
     print(f"Python executable: {sys.executable}")
 
 class ImageGenerator:
-    def __init__(self):
+    def __init__(self, model_path=None):
         try:
             print("\nInitializing Stable Diffusion pipeline...")
             print("This may take a few minutes on first run as models are downloaded...")
@@ -63,12 +63,28 @@ class ImageGenerator:
             
             print("\nLoading Stable Diffusion pipeline...")
             # Initialize Stable Diffusion XL pipeline
-            self.pipeline = StableDiffusionXLPipeline.from_pretrained(
-                "stabilityai/stable-diffusion-xl-base-1.0",
-                torch_dtype=torch.float32,
-                variant="fp16",  # Use fp16 for better memory efficiency
-                use_safetensors=True
-            )
+            if model_path:
+                print(f"Loading model from: {model_path}")
+                if model_path.endswith('.safetensors'):
+                    self.pipeline = StableDiffusionXLPipeline.from_single_file(
+                        model_path,
+                        torch_dtype=torch.float32,
+                        variant="fp16",
+                    )
+                else:
+                    self.pipeline = StableDiffusionXLPipeline.from_pretrained(
+                        model_path,
+                        torch_dtype=torch.float32,
+                        variant="fp16",
+                        use_safetensors=True
+                    )
+            else:
+                self.pipeline = StableDiffusionXLPipeline.from_pretrained(
+                    "stabilityai/stable-diffusion-xl-base-1.0",
+                    torch_dtype=torch.float32,
+                    variant="fp16",  # Use fp16 for better memory efficiency
+                    use_safetensors=True
+                )
             print("Pipeline loaded successfully")
 
             # Load the refiner pipeline
@@ -432,11 +448,12 @@ def main():
     parser.add_argument('--detail', action='store_true',
                       help='Show detailed intermediate images throughout the entire generation process')
     parser.add_argument('--skip-refiner', action='store_true', help='Skip the SDXL refiner step')
+    parser.add_argument('--model', type=str, help='Path to a local model directory or .safetensors file')
     args = parser.parse_args()
 
     print("\nStarting Image Generator...")
     print("Make sure LMStudio is running at http://127.0.0.1:1234")
-    generator = ImageGenerator()
+    generator = ImageGenerator(model_path=args.model)
     
     # If --steps is provided, set the number of steps
     if args.steps:
