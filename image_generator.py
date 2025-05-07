@@ -48,7 +48,7 @@ class ImageGenerator:
             print(f"\nInitial number of steps: {self.num_steps}")
             
             # Initialize default and current dimensions
-            self.default_dimensions = (512, 512)
+            self.default_dimensions = (1024, 768)
             self.current_dimensions = self.default_dimensions
             print(f"Initial dimensions: {self.current_dimensions[0]}x{self.current_dimensions[1]}")
             
@@ -127,7 +127,7 @@ class ImageGenerator:
             # Initialize conversation history with updated system prompt for SDXL
             self.conversation_history = [
                 {"role": "system", "content": """You are a creative AI assistant that helps craft detailed and effective prompts for Stable Diffusion XL. 
-                Your task is to create coherent, evolving prompts that maintain and build upon previous details.
+                Your task is to create coherent, evolving prompts that maintain and build upon previous details.  When in doubt the goal is photorealism.   
                 
                 Rules for prompt creation:
                 1. Always include relevant details from previous prompts
