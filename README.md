@@ -46,7 +46,7 @@ pip install -r requirements.txt
 1. Start LMStudio and ensure it's running at http://127.0.0.1:1234
 2. Run the image generator:
 ```bash
-python image_generator.py
+python image_generator.py [--model_id MODEL] [other options]
 ```
 
 3. Enter your image idea when prompted
@@ -54,13 +54,32 @@ python image_generator.py
    - `/reset` - Reset the conversation history
    - `/quit` - Exit the program
 
+### Model Selection
+
+You can select which Stable Diffusion model to use with the `--model_id` argument:
+
+| Model Name                | Identifier (use with --model_id)         |
+|--------------------------|------------------------------------------|
+| SD 3.5 Medium (default)  | sd35medium                               |
+| SDXL 1.0                 | sdxl                                     |
+| SD 1.5                   | sd15                                     |
+| SD 1.4                   | sd14                                     |
+
+**Example usage:**
+```bash
+python image_generator.py --idea "A Maine coffee shop in the fall [768x768]" --model_id sdxl
+python image_generator.py --idea "A Maine coffee shop in the fall [768x768]" --model_id sd15
+python image_generator.py --idea "A Maine coffee shop in the fall [768x768]" --model_id sd14
+# Default (no argument): SD 3.5 Medium
+```
+
 ## Configuration
 
 The script uses the following default settings:
-- Stable Diffusion v1.4
+- Stable Diffusion 3.5 Medium (default)
 - 512x512 image dimensions (customizable)
-- 50 inference steps
-- 7.5 guidance scale
+- 35 inference steps (customizable)
+- 7.5 guidance scale (customizable)
 
 ## License
 
