@@ -1,6 +1,7 @@
 import requests
 import json
 from diffusers import StableDiffusionXLPipeline, StableDiffusion3Pipeline, StableDiffusionPipeline, DPMSolverMultistepScheduler, EulerDiscreteScheduler, LMSDiscreteScheduler, PNDMScheduler, StableDiffusionXLImg2ImgPipeline
+from diffusers import DDIMScheduler, HeunDiscreteScheduler, UniPCMultistepScheduler, EulerAncestralDiscreteScheduler, DEISMultistepScheduler, KDPM2DiscreteScheduler, KDPM2AncestralDiscreteScheduler
 import torch
 from PIL import Image
 import io
@@ -14,6 +15,7 @@ import sys
 import traceback
 import subprocess
 import argparse
+import logging
 
 def debug_torch_device():
     print("\nDebug information:")
@@ -27,7 +29,7 @@ def debug_torch_device():
     print(f"Python executable: {sys.executable}")
 
 class ImageGenerator:
-    def __init__(self, model_path=None, pipeline_class=None, model_name_for_prompt=None, use_sdxl=False):
+    def __init__(self, model_path=None, pipeline_class=None, model_name_for_prompt=None, use_sdxl=False, model_id=None):
         try:
             self.use_sdxl = use_sdxl
             self.model_name_for_prompt = model_name_for_prompt or ("Stable Diffusion XL" if use_sdxl else "Stable Diffusion 3.5 Medium")
@@ -68,8 +70,11 @@ class ImageGenerator:
             self.num_steps = 35
             print(f"\nInitial number of steps: {self.num_steps}")
             
-            # Initialize default and current dimensions
-            self.default_dimensions = (1024, 768)
+            # Set default and current dimensions based on model
+            if model_id in ["sd15", "sd14"]:
+                self.default_dimensions = (512, 512)
+            else:
+                self.default_dimensions = (1024, 1024)
             self.current_dimensions = self.default_dimensions
             print(f"Initial dimensions: {self.current_dimensions[0]}x{self.current_dimensions[1]}")
             
@@ -103,14 +108,12 @@ class ImageGenerator:
             if torch.backends.mps.is_available():
                 dtype = torch.float32
                 print("Using torch.float32 for pipeline on MPS (Mac) to avoid black images.")
-            else:
-                dtype = torch.float16
-                print("Using torch.float16 for pipeline to save memory.")
+
             if model_path:
                 print(f"Loading base model from: {model_path}")
                 if model_path.endswith('.safetensors'):
                     self.pipeline = self.pipeline_class.from_single_file(
-                        model_path,
+                        model_path, 
                         torch_dtype=dtype
                     )
                 else:
@@ -161,6 +164,18 @@ class ImageGenerator:
                 {self.common_prompt_rules}"""}
             ]
             
+            # Set up logging
+            self.logger = logging.getLogger("ImageGenerator")
+            self.logger.setLevel(logging.INFO)
+            os.makedirs(self.output_dir, exist_ok=True)
+            log_file = os.path.join(self.output_dir, "generation.log")
+            fh = logging.FileHandler(log_file)
+            fh.setLevel(logging.INFO)
+            formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+            fh.setFormatter(formatter)
+            if not self.logger.handlers:
+                self.logger.addHandler(fh)
+            
             print("\nInitialization complete!")
             
         except Exception as e:
@@ -205,7 +220,7 @@ class ImageGenerator:
         }
         
         # Define junk tokens to filter out
-        JUNK_TOKENS = {"<think>", "<thinking>", "think", "thinking", "", "<|im_start|>", "<|im_end|>", "</think>"}
+        JUNK_TOKENS = {"<think>", "Line 1", "<thinking>", "think", "thinking", "", "<|im_start|>", "<|im_end|>", "</think>"}
         
         try:
             response = requests.post(self.lmstudio_url, headers=headers, json=data)
@@ -331,9 +346,6 @@ class ImageGenerator:
             self.current_generation_dir = generation_dir # Added for callback access
             print(f"\nIntermediate images will be saved in: {generation_dir}")
             
-            # Define callback function to show progress and intermediate images
-            # Note: callback_on_step_end is now a class method
-            
             # Prepare callback parameters if not on CPU
             callback_params = {}
             if self.device != "cpu": 
@@ -353,6 +365,17 @@ class ImageGenerator:
                 **callback_params 
             )
             base_image = image_result.images[0]
+            
+            # Robust: Always decode if not a PIL image
+            from PIL import Image
+            if not isinstance(base_image, Image.Image):
+                print("\nDecoding latent output to PIL image (auto-fix for latent output)...")
+                with torch.no_grad():
+                    scaling_factor = getattr(self.pipeline.vae.config, "scaling_factor", 0.18215)
+                    if hasattr(base_image, 'ndim') and base_image.ndim == 3:
+                        base_image = base_image.unsqueeze(0)
+                    decoded = self.pipeline.vae.decode(base_image / scaling_factor, return_dict=False)[0]
+                    base_image = self.pipeline.image_processor.postprocess(decoded, output_type="pil")[0]
             
             # Refine the image if applicable
             if self.refiner and output_type == "latent":
@@ -390,6 +413,10 @@ class ImageGenerator:
             print(f"Resource usage: {resource_usage}")
             print(f"Image dimensions: {refined_image.size[0]}x{refined_image.size[1]} pixels")
             print(f"Intermediate images saved in: {generation_dir}")
+
+            # Log the generation
+            output_file = self.create_filename(prompt)
+            self.logger.info(f"Model: {self.model_name_for_prompt}, Sampler: {sampler_name}, Prompt: {prompt}, Negative: {negative_prompt}, Steps: {num_inference_steps}, Guidance: {guidance_scale}, Seed: {self.current_seed}, Dimensions: {width}x{height}, Output: {output_file}")
             
             return refined_image
         except Exception as e:
@@ -431,32 +458,8 @@ class ImageGenerator:
 
     # Converted to a class method
     def callback_on_step_end(self, pipe, step, timestep, callback_kwargs):
-        progress = (step + 1) / self.num_steps * 100 
-        print(f"\rProgress: {progress:.1f}% (Step {step + 1}/{self.num_steps})", end="")
-        
-        should_show_image = False
-        if self.show_detail:
-            should_show_image = True
-        elif progress >= 75 and progress <= 95:
-            should_show_image = True
-        
-        if should_show_image:
-            current_latents = callback_kwargs["latents"]
-            with torch.no_grad():
-                # Use decode_latents if available, otherwise use VAE decode
-                if hasattr(pipe, 'decode_latents'):
-                    image = pipe.decode_latents(current_latents)[0]
-                else:
-                    # Use VAE decode for SD3.5 pipelines
-                    image = pipe.vae.decode(current_latents / pipe.vae.config.scaling_factor, return_dict=False)[0]
-                pil_image = pipe.image_processor.postprocess(image, output_type="pil")[0]
-            
-            temp_path = os.path.join(self.current_generation_dir, f"step{step + 1}_{progress:.1f}%.png")
-            pil_image.save(temp_path, quality=95)
-        
-        if (step + 1) % 10 == 0:
-            print(f"\nResource usage: {self.get_resource_usage()}")
-        
+        progress = (step + 1) / self.num_steps * 100
+        print(f"Progress: {progress:.1f}% (Step {step + 1}/{self.num_steps})")
         return callback_kwargs
 
 def main():
@@ -464,8 +467,8 @@ def main():
     parser = argparse.ArgumentParser(description='Generate images using Stable Diffusion')
     parser.add_argument('--idea', type=str, help='Direct image generation idea')
     parser.add_argument('--steps', type=int, help='Number of inference steps (default: 50 for SDXL, or as set in generator)')
-    parser.add_argument('--sampler', type=str, choices=['dpm', 'euler', 'lms', 'pndm'], default='dpm',
-                      help='Sampler to use: dpm (DPMSolverMultistep), euler (EulerDiscrete), lms (LMSDiscrete), pndm (PNDM)')
+    parser.add_argument('--sampler', type=str, choices=['dpm', 'euler', 'lms', 'pndm', 'ddim', 'heun', 'unipc', 'euler_a', 'deis', 'k_dpm2', 'k_dpm2_a'], default='dpm',
+                      help='Sampler to use: dpm (DPMSolverMultistep), euler (EulerDiscrete), lms (LMSDiscrete), pndm (PNDM), ddim (DDIM), heun (HeunDiscrete), unipc (UniPCMultistep), euler_a (EulerAncestral), deis (DEISMultistep), k_dpm2 (KDPM2Discrete), k_dpm2_a (KDPM2Ancestral)')
     parser.add_argument('--guidance', type=float, default=7.5,
                       help='Guidance scale (default: 7.5, higher values make the image more closely follow the prompt)')
     parser.add_argument('--detail', action='store_true',
@@ -474,6 +477,7 @@ def main():
     parser.add_argument('--model', type=str, help='Path to a local model directory or .safetensors file')
     parser.add_argument('--model_id', type=str, choices=['sd35medium', 'sdxl', 'sd15', 'sd14'], default='sd35medium', help='Select the model: sd35medium (default), sdxl, sd15, sd14')
     parser.add_argument('--all', action='store_true', help='Run the prompt through all supported models (requires --idea)')
+    parser.add_argument('--all_samplers', action='store_true', help='Run the selected model with all supported samplers (requires --idea)')
     args = parser.parse_args()
 
     # Map model_id to Hugging Face repo and pipeline class
@@ -496,7 +500,8 @@ def main():
         model_path=args.model if args.model else model_path,
         pipeline_class=pipeline_class,
         model_name_for_prompt=model_name_for_prompt,
-        use_sdxl=use_sdxl
+        use_sdxl=use_sdxl,
+        model_id=selected_model_id
     )
     # NOTE: To generalize ImageGenerator for all pipeline types, refactor the class to accept pipeline_class as an argument and handle accordingly.
     
@@ -506,15 +511,24 @@ def main():
         print(f"\nNumber of steps set to: {generator.num_steps}")
     
     # Set the sampler based on the argument
-    if args.sampler == 'dpm':
-        generator.pipeline.scheduler = DPMSolverMultistepScheduler.from_config(generator.pipeline.scheduler.config)
-    elif args.sampler == 'euler':
-        generator.pipeline.scheduler = EulerDiscreteScheduler.from_config(generator.pipeline.scheduler.config)
-    elif args.sampler == 'lms':
-        generator.pipeline.scheduler = LMSDiscreteScheduler.from_config(generator.pipeline.scheduler.config)
-    elif args.sampler == 'pndm':
-        generator.pipeline.scheduler = PNDMScheduler.from_config(generator.pipeline.scheduler.config)
-    print(f"\nUsing {args.sampler.upper()} sampler")
+    sampler_map = {
+        'dpm': DPMSolverMultistepScheduler,
+        'euler': EulerDiscreteScheduler,
+        'lms': LMSDiscreteScheduler,
+        'pndm': PNDMScheduler,
+        'ddim': DDIMScheduler,
+        'heun': HeunDiscreteScheduler,
+        'unipc': UniPCMultistepScheduler,
+        'euler_a': EulerAncestralDiscreteScheduler,
+        'deis': DEISMultistepScheduler,
+        'k_dpm2': KDPM2DiscreteScheduler,
+        'k_dpm2_a': KDPM2AncestralDiscreteScheduler,
+    }
+    if args.sampler in sampler_map:
+        generator.pipeline.scheduler = sampler_map[args.sampler].from_config(generator.pipeline.scheduler.config)
+        print(f"\nUsing {args.sampler.upper()} sampler")
+    else:
+        print(f"\nUnknown sampler: {args.sampler}")
     
     # Set initial guidance scale
     guidance_scale = args.guidance
@@ -538,22 +552,19 @@ def main():
                 model_path=args.model if args.model else model_path,
                 pipeline_class=pipeline_class,
                 model_name_for_prompt=model_name_for_prompt,
-                use_sdxl=use_sdxl
+                use_sdxl=use_sdxl,
+                model_id=model_id
             )
             # If --steps is provided, set the number of steps
             if args.steps:
                 generator.num_steps = args.steps
                 print(f"\nNumber of steps set to: {generator.num_steps}")
             # Set the sampler based on the argument
-            if args.sampler == 'dpm':
-                generator.pipeline.scheduler = DPMSolverMultistepScheduler.from_config(generator.pipeline.scheduler.config)
-            elif args.sampler == 'euler':
-                generator.pipeline.scheduler = EulerDiscreteScheduler.from_config(generator.pipeline.scheduler.config)
-            elif args.sampler == 'lms':
-                generator.pipeline.scheduler = LMSDiscreteScheduler.from_config(generator.pipeline.scheduler.config)
-            elif args.sampler == 'pndm':
-                generator.pipeline.scheduler = PNDMScheduler.from_config(generator.pipeline.scheduler.config)
-            print(f"\nUsing {args.sampler.upper()} sampler")
+            if args.sampler in sampler_map:
+                generator.pipeline.scheduler = sampler_map[args.sampler].from_config(generator.pipeline.scheduler.config)
+                print(f"\nUsing {args.sampler.upper()} sampler")
+            else:
+                print(f"\nUnknown sampler: {args.sampler}")
             guidance_scale = args.guidance
             print(f"\nGuidance scale set to: {guidance_scale}")
             generator.show_detail = args.detail
@@ -572,8 +583,58 @@ def main():
                 print(f"Error: {str(e)}")
         return
 
+    if args.all_samplers:
+        if not args.idea:
+            print("Error: --all_samplers requires --idea to be specified.")
+            return
+        sampler_names = ['dpm', 'euler', 'lms', 'pndm', 'ddim', 'heun', 'unipc', 'euler_a', 'deis', 'k_dpm2', 'k_dpm2_a']
+        if args.sampler and args.sampler not in sampler_names:
+            print(f"Warning: {args.sampler} is not a recognized sampler, will use all supported samplers.")
+        # Use the selected model only
+        print(f"\n--- Running {model_name_for_prompt} with all samplers ---")
+        for sampler in sampler_names:
+            print(f"\n--- Using sampler: {sampler.upper()} ---")
+            generator = ImageGenerator(
+                model_path=args.model if args.model else model_path,
+                pipeline_class=pipeline_class,
+                model_name_for_prompt=model_name_for_prompt,
+                use_sdxl=use_sdxl,
+                model_id=selected_model_id
+            )
+            if args.steps:
+                generator.num_steps = args.steps
+                print(f"\nNumber of steps set to: {generator.num_steps}")
+            generator.pipeline.scheduler = sampler_map[sampler].from_config(generator.pipeline.scheduler.config)
+            print(f"\nUsing {sampler.upper()} sampler")
+            guidance_scale = args.guidance
+            print(f"\nGuidance scale set to: {guidance_scale}")
+            generator.show_detail = args.detail
+            if generator.show_detail:
+                print("\nDetailed intermediate images will be shown throughout the entire generation process")
+            try:
+                enhanced_prompt, negative_prompt = generator.get_prompt_from_lmstudio(args.idea)
+                print(f"\nGenerated prompt: {enhanced_prompt}")
+                if negative_prompt:
+                    print(f"\nNegative prompt: {negative_prompt}")
+                image = generator.generate_image(args.idea, enhanced_prompt, negative_prompt, 
+                                              num_inference_steps=generator.num_steps,
+                                              guidance_scale=guidance_scale)
+                # Save with sampler name in filename
+                if image:
+                    orig_create_filename = generator.create_filename
+                    def create_filename_with_sampler(prompt, sampler_name=sampler):
+                        base = orig_create_filename(prompt)
+                        base, ext = os.path.splitext(base)
+                        return f"{base}_{sampler_name}{ext}"
+                    generator.create_filename = create_filename_with_sampler
+                    generator.save_image(image, enhanced_prompt)
+                    generator.create_filename = orig_create_filename
+            except Exception as e:
+                print(f"Error: {str(e)}")
+        return
+
     # If --idea is provided, generate one image and exit
-    if args.idea and not args.all:
+    if args.idea and not args.all and not args.all_samplers:
         try:
             # Get prompts, dimensions are handled internally now
             enhanced_prompt, negative_prompt = generator.get_prompt_from_lmstudio(args.idea)
