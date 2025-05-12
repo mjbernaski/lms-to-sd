@@ -459,6 +459,7 @@ class ImageGenerator:
     # Converted to a class method
     def callback_on_step_end(self, pipe, step, timestep, callback_kwargs):
         progress = (step + 1) / self.num_steps * 100
+        # Simplified: print each progress update on a new line (no carriage return/overwrite)
         print(f"Progress: {progress:.1f}% (Step {step + 1}/{self.num_steps})")
         return callback_kwargs
 
@@ -487,7 +488,8 @@ def main():
         'sd15': ('runwayml/stable-diffusion-v1-5', StableDiffusionPipeline, 'Stable Diffusion 1.5'),
         'sd14': ('CompVis/stable-diffusion-v1-4', StableDiffusionPipeline, 'Stable Diffusion 1.4'),
     }
-    selected_model_id = args.model_id
+    # Set SDXL as the default model
+    selected_model_id = args.model_id if args.model_id else 'sdxl'
     model_path, pipeline_class, model_name_for_prompt = model_map[selected_model_id]
 
     print("\nStarting Image Generator...")
@@ -503,7 +505,17 @@ def main():
         use_sdxl=use_sdxl,
         model_id=selected_model_id
     )
-    # NOTE: To generalize ImageGenerator for all pipeline types, refactor the class to accept pipeline_class as an argument and handle accordingly.
+    # Set device: use CPU for SD 3.5 Medium, MPS for all others (if available)
+    if selected_model_id == 'sd35medium':
+        generator.device = 'cpu'
+        print("\nForcing CPU for SD 3.5 Medium (default)")
+    elif torch.backends.mps.is_available():
+        generator.device = 'mps'
+        print("\nUsing MPS for this model")
+    else:
+        generator.device = 'cpu'
+        print("\nMPS not available, using CPU")
+    generator.pipeline = generator.pipeline.to(generator.device)
     
     # If --steps is provided, set the number of steps
     if args.steps:
@@ -555,6 +567,17 @@ def main():
                 use_sdxl=use_sdxl,
                 model_id=model_id
             )
+            # Set device: use CPU for SD 3.5 Medium, MPS for all others (if available)
+            if model_id == 'sd35medium':
+                generator.device = 'cpu'
+                print("\nForcing CPU for SD 3.5 Medium (default)")
+            elif torch.backends.mps.is_available():
+                generator.device = 'mps'
+                print("\nUsing MPS for this model")
+            else:
+                generator.device = 'cpu'
+                print("\nMPS not available, using CPU")
+            generator.pipeline = generator.pipeline.to(generator.device)
             # If --steps is provided, set the number of steps
             if args.steps:
                 generator.num_steps = args.steps
@@ -601,6 +624,17 @@ def main():
                 use_sdxl=use_sdxl,
                 model_id=selected_model_id
             )
+            # Set device: use CPU for SD 3.5 Medium, MPS for all others (if available)
+            if selected_model_id == 'sd35medium':
+                generator.device = 'cpu'
+                print("\nForcing CPU for SD 3.5 Medium (default)")
+            elif torch.backends.mps.is_available():
+                generator.device = 'mps'
+                print("\nUsing MPS for this model")
+            else:
+                generator.device = 'cpu'
+                print("\nMPS not available, using CPU")
+            generator.pipeline = generator.pipeline.to(generator.device)
             if args.steps:
                 generator.num_steps = args.steps
                 print(f"\nNumber of steps set to: {generator.num_steps}")
