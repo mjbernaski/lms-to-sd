@@ -17,6 +17,7 @@ import subprocess
 import argparse
 import logging
 import difflib
+import textwrap
 
 def debug_torch_device():
     print("\nDebug information:")
@@ -28,6 +29,11 @@ def debug_torch_device():
     print(f"Python version: {sys.version}")
     print(f"Current working directory: {os.getcwd()}")
     print(f"Python executable: {sys.executable}")
+
+def wrap_console_text(text, words_per_line=20):
+    words = text.split()
+    lines = [" ".join(words[i:i+words_per_line]) for i in range(0, len(words), words_per_line)]
+    return "\n".join(lines)
 
 class ImageGenerator:
     def __init__(self, model_path=None, pipeline_class=None, model_name_for_prompt=None, use_sdxl=False, model_id=None):
@@ -57,7 +63,7 @@ class ImageGenerator:
             self.pipeline_class = pipeline_class
             self.refiner = None
             # Only print model name once
-            print(f"Model: {self.model_name_for_prompt}")
+            print(wrap_console_text(f"Model: {self.model_name_for_prompt}"))
             # Only print device info if needed
             # Debug device information (optional, comment out if not needed)
             # debug_torch_device()
@@ -126,7 +132,7 @@ class ImageGenerator:
             height = int(dimension_match.group(2))
             # Update the persistent dimensions for the session
             self.current_dimensions = (width, height)
-            print(f"Dimensions updated to: {self.current_dimensions[0]}x{self.current_dimensions[1]}")
+            print(wrap_console_text(f"Dimensions updated to: {self.current_dimensions[0]}x{self.current_dimensions[1]}"))
             # Remove the dimension specification from the input passed to LM Studio
             original_input_for_lm = re.sub(r'\[?(\d+)x(\d+)\]?', '', user_input).strip()
         
@@ -205,9 +211,9 @@ class ImageGenerator:
                     )
                     diff_lines = list(diff)
                     if diff_lines:
-                        print("\nPrompt diff (previous → current):")
+                        print(wrap_console_text("\nPrompt diff (previous → current):"))
                         for line in diff_lines:
-                            print(line)
+                            print(wrap_console_text(line))
                 self._last_prompt = prompt
                 return prompt, negative_prompt
             else:
@@ -236,11 +242,11 @@ class ImageGenerator:
             }
         ]
         self.current_seed = torch.randint(0, 2**32 - 1, (1,)).item()
-        print("\nConversation history has been reset.")
-        print(f"New seed: {self.current_seed}")
+        print(wrap_console_text("\nConversation history has been reset."))
+        print(wrap_console_text(f"New seed: {self.current_seed}"))
         self.idea_history = [] # Reset idea history
         self.current_dimensions = self.default_dimensions # Reset dimensions to default
-        print(f"Dimensions reset to default: {self.current_dimensions[0]}x{self.current_dimensions[1]}")
+        print(wrap_console_text(f"Dimensions reset to default: {self.current_dimensions[0]}x{self.current_dimensions[1]}"))
         self._last_prompt = None
 
     def get_resource_usage(self):
@@ -257,10 +263,10 @@ class ImageGenerator:
 
     def generate_image(self, original_idea: str, prompt, negative_prompt=None, num_inference_steps=50, guidance_scale=7.5):
         self.idea_history.append(original_idea)
-        print(f"\nGenerating: {prompt[:80]}{'...' if len(prompt) > 80 else ''}")
+        print(wrap_console_text(f"\nGenerating: {prompt[:80]}{'...' if len(prompt) > 80 else ''}"))
         width, height = self.current_dimensions
         # Only print key parameters
-        print(f"Seed: {self.current_seed} | Steps: {num_inference_steps} | Size: {width}x{height}")
+        print(wrap_console_text(f"Seed: {self.current_seed} | Steps: {num_inference_steps} | Size: {width}x{height}"))
         try:
             start_time = time.time()
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -285,7 +291,7 @@ class ImageGenerator:
             base_image = image_result.images[0]
             refined_image = base_image
             duration = time.time() - start_time
-            print(f"\nDone in {duration:.1f}s.")
+            print(wrap_console_text(f"\nDone in {duration:.1f}s."))
             return refined_image
         except Exception as e:
             print(f"Error generating image: {str(e)}")
@@ -309,7 +315,7 @@ class ImageGenerator:
             try:
                 filename = self.create_filename(prompt)
                 image.save(filename)
-                print(f"Saved: {filename}")
+                print(wrap_console_text(f"Saved: {filename}"))
                 if platform.system() == 'Darwin':
                     subprocess.run(['open', filename])
                 elif platform.system() == 'Windows':
@@ -356,9 +362,9 @@ def main():
     selected_model_id = args.model_id if args.model_id else 'sdxl'
     model_path, pipeline_class, model_name_for_prompt = model_map[selected_model_id]
 
-    print("\nStarting Image Generator...")
-    print(f"Using {model_name_for_prompt} model.")
-    print("Make sure LMStudio is running at http://127.0.0.1:1234")
+    print(wrap_console_text("\nStarting Image Generator..."))
+    print(wrap_console_text(f"Using {model_name_for_prompt} model."))
+    print(wrap_console_text("Make sure LMStudio is running at http://127.0.0.1:1234"))
     
     # Only SDXL should set use_sdxl True
     use_sdxl = (selected_model_id == 'sdxl')
@@ -373,16 +379,16 @@ def main():
     # Set device: use MPS for all models if available, otherwise CPU
     if torch.backends.mps.is_available():
         generator.device = 'mps'
-        print("\nUsing MPS for this model")
+        print(wrap_console_text("\nUsing MPS for this model"))
     else:
         generator.device = 'cpu'
-        print("\nMPS not available, using CPU")
+        print(wrap_console_text("\nMPS not available, using CPU"))
     generator.pipeline = generator.pipeline.to(generator.device)
     
     # If --steps is provided, set the number of steps
     if args.steps:
         generator.num_steps = args.steps
-        print(f"\nNumber of steps set to: {generator.num_steps}")
+        print(wrap_console_text(f"\nNumber of steps set to: {generator.num_steps}"))
     
     # Set the sampler based on the argument
     sampler_map = {
@@ -400,18 +406,18 @@ def main():
     }
     if args.sampler in sampler_map:
         generator.pipeline.scheduler = sampler_map[args.sampler].from_config(generator.pipeline.scheduler.config)
-        print(f"\nUsing {args.sampler.upper()} sampler")
+        print(wrap_console_text(f"\nUsing {args.sampler.upper()} sampler"))
     else:
-        print(f"\nUnknown sampler: {args.sampler}")
+        print(wrap_console_text(f"\nUnknown sampler: {args.sampler}"))
     
     # Set initial guidance scale
     guidance_scale = args.guidance
-    print(f"\nGuidance scale set to: {guidance_scale}")
+    print(wrap_console_text(f"\nGuidance scale set to: {guidance_scale}"))
     
     # Set detail mode
     generator.show_detail = args.detail
     if generator.show_detail:
-        print("\nDetailed intermediate images will be shown throughout the entire generation process")
+        print(wrap_console_text("\nDetailed intermediate images will be shown throughout the entire generation process"))
     
     if args.all:
         if not args.idea:
@@ -420,7 +426,7 @@ def main():
         all_model_ids = ['sdxl', 'sd15', 'sd14']
         for model_id in all_model_ids:
             model_path, pipeline_class, model_name_for_prompt = model_map[model_id]
-            print(f"\n--- Running with {model_name_for_prompt} ---")
+            print(wrap_console_text(f"\n--- Running with {model_name_for_prompt} ---"))
             use_sdxl = (model_id == 'sdxl')
             generator = ImageGenerator(
                 model_path=args.model if args.model else model_path,
@@ -432,31 +438,31 @@ def main():
             # Set device: use MPS for all models if available, otherwise CPU
             if torch.backends.mps.is_available():
                 generator.device = 'mps'
-                print("\nUsing MPS for this model")
+                print(wrap_console_text("\nUsing MPS for this model"))
             else:
                 generator.device = 'cpu'
-                print("\nMPS not available, using CPU")
+                print(wrap_console_text("\nMPS not available, using CPU"))
             generator.pipeline = generator.pipeline.to(generator.device)
             # If --steps is provided, set the number of steps
             if args.steps:
                 generator.num_steps = args.steps
-                print(f"\nNumber of steps set to: {generator.num_steps}")
+                print(wrap_console_text(f"\nNumber of steps set to: {generator.num_steps}"))
             # Set the sampler based on the argument
             if args.sampler in sampler_map:
                 generator.pipeline.scheduler = sampler_map[args.sampler].from_config(generator.pipeline.scheduler.config)
-                print(f"\nUsing {args.sampler.upper()} sampler")
+                print(wrap_console_text(f"\nUsing {args.sampler.upper()} sampler"))
             else:
-                print(f"\nUnknown sampler: {args.sampler}")
+                print(wrap_console_text(f"\nUnknown sampler: {args.sampler}"))
             guidance_scale = args.guidance
-            print(f"\nGuidance scale set to: {guidance_scale}")
+            print(wrap_console_text(f"\nGuidance scale set to: {guidance_scale}"))
             generator.show_detail = args.detail
             if generator.show_detail:
-                print("\nDetailed intermediate images will be shown throughout the entire generation process")
+                print(wrap_console_text("\nDetailed intermediate images will be shown throughout the entire generation process"))
             try:
                 enhanced_prompt, negative_prompt = generator.get_prompt_from_lmstudio(args.idea)
-                print(f"\nGenerated prompt: {enhanced_prompt}")
+                print(wrap_console_text(f"\nGenerated prompt: {enhanced_prompt}"))
                 if negative_prompt:
-                    print(f"\nNegative prompt: {negative_prompt}")
+                    print(wrap_console_text(f"\nNegative prompt: {negative_prompt}"))
                 image = generator.generate_image(args.idea, enhanced_prompt, negative_prompt, 
                                               num_inference_steps=generator.num_steps,
                                               guidance_scale=guidance_scale)
@@ -473,9 +479,9 @@ def main():
         if args.sampler and args.sampler not in sampler_names:
             print(f"Warning: {args.sampler} is not a recognized sampler, will use all supported samplers.")
         # Use the selected model only
-        print(f"\n--- Running {model_name_for_prompt} with all samplers ---")
+        print(wrap_console_text(f"\n--- Running {model_name_for_prompt} with all samplers ---"))
         for sampler in sampler_names:
-            print(f"\n--- Using sampler: {sampler.upper()} ---")
+            print(wrap_console_text(f"\n--- Using sampler: {sampler.upper()} ---"))
             generator = ImageGenerator(
                 model_path=args.model if args.model else model_path,
                 pipeline_class=pipeline_class,
@@ -486,26 +492,26 @@ def main():
             # Set device: use MPS for all models if available, otherwise CPU
             if torch.backends.mps.is_available():
                 generator.device = 'mps'
-                print("\nUsing MPS for this model")
+                print(wrap_console_text("\nUsing MPS for this model"))
             else:
                 generator.device = 'cpu'
-                print("\nMPS not available, using CPU")
+                print(wrap_console_text("\nMPS not available, using CPU"))
             generator.pipeline = generator.pipeline.to(generator.device)
             if args.steps:
                 generator.num_steps = args.steps
-                print(f"\nNumber of steps set to: {generator.num_steps}")
+                print(wrap_console_text(f"\nNumber of steps set to: {generator.num_steps}"))
             generator.pipeline.scheduler = sampler_map[sampler].from_config(generator.pipeline.scheduler.config)
-            print(f"\nUsing {sampler.upper()} sampler")
+            print(wrap_console_text(f"\nUsing {sampler.upper()} sampler"))
             guidance_scale = args.guidance
-            print(f"\nGuidance scale set to: {guidance_scale}")
+            print(wrap_console_text(f"\nGuidance scale set to: {guidance_scale}"))
             generator.show_detail = args.detail
             if generator.show_detail:
-                print("\nDetailed intermediate images will be shown throughout the entire generation process")
+                print(wrap_console_text("\nDetailed intermediate images will be shown throughout the entire generation process"))
             try:
                 enhanced_prompt, negative_prompt = generator.get_prompt_from_lmstudio(args.idea)
-                print(f"\nGenerated prompt: {enhanced_prompt}")
+                print(wrap_console_text(f"\nGenerated prompt: {enhanced_prompt}"))
                 if negative_prompt:
-                    print(f"\nNegative prompt: {negative_prompt}")
+                    print(wrap_console_text(f"\nNegative prompt: {negative_prompt}"))
                 image = generator.generate_image(args.idea, enhanced_prompt, negative_prompt, 
                                               num_inference_steps=generator.num_steps,
                                               guidance_scale=guidance_scale)
@@ -528,9 +534,9 @@ def main():
         try:
             # Get prompts, dimensions are handled internally now
             enhanced_prompt, negative_prompt = generator.get_prompt_from_lmstudio(args.idea)
-            print(f"\nGenerated prompt: {enhanced_prompt}")
+            print(wrap_console_text(f"\nGenerated prompt: {enhanced_prompt}"))
             if negative_prompt:
-                print(f"\nNegative prompt: {negative_prompt}")
+                print(wrap_console_text(f"\nNegative prompt: {negative_prompt}"))
             # Dimensions are no longer returned/needed here
             
             # Generate image using stored dimensions
@@ -544,12 +550,12 @@ def main():
             return
     
     # Interactive mode
-    print("Type '/reset' to reset the conversation history")
-    print("Type '/steps <number>' to change the number of inference steps (default: 75)")
-    print("Type '/guidance <number>' to change the guidance scale (default: 7.5)")
-    print("Type '/new-seed' to generate a new random seed for the next image")
-    print("Type '/same-seed' to use the same seed for the next image only")
-    print("Type '/quit' to exit")
+    print(wrap_console_text("Type '/reset' to reset the conversation history"))
+    print(wrap_console_text("Type '/steps <number>' to change the number of inference steps (default: 75)"))
+    print(wrap_console_text("Type '/guidance <number>' to change the guidance scale (default: 7.5)"))
+    print(wrap_console_text("Type '/new-seed' to generate a new random seed for the next image"))
+    print(wrap_console_text("Type '/same-seed' to use the same seed for the next image only"))
+    print(wrap_console_text("Type '/quit' to exit"))
     
     waiting_for_idea_after_same_seed = False
 
@@ -562,40 +568,40 @@ def main():
             break
         elif user_input.lower() == '/reset':
             generator.reset_conversation()
-            print("\nConversation history has been reset. You can start a new conversation.")
+            print(wrap_console_text("\nConversation history has been reset. You can start a new conversation."))
             continue
         elif user_input.lower() == '/new-seed':
             generator.current_seed = torch.randint(0, 2**32 - 1, (1,)).item()
-            print(f"\nNew seed set: {generator.current_seed}")
+            print(wrap_console_text(f"\nNew seed set: {generator.current_seed}"))
             continue
         elif user_input.lower() == '/same-seed':
             generator.use_same_seed_next = True
-            print("\nThe next image will use the same seed as the previous one.")
+            print(wrap_console_text("\nThe next image will use the same seed as the previous one."))
             waiting_for_idea_after_same_seed = True
             continue
         elif user_input.lower().startswith('/steps '):
             try:
                 new_steps = int(user_input.split()[1])
                 if new_steps < 1:
-                    print("Number of steps must be at least 1")
+                    print(wrap_console_text("Number of steps must be at least 1"))
                     continue
                 generator.num_steps = new_steps
-                print(f"\nNumber of steps set to: {generator.num_steps}")
+                print(wrap_console_text(f"\nNumber of steps set to: {generator.num_steps}"))
                 continue
             except (ValueError, IndexError):
-                print("Invalid number of steps. Usage: /steps <number>")
+                print(wrap_console_text("Invalid number of steps. Usage: /steps <number>"))
                 continue
         elif user_input.lower().startswith('/guidance '):
             try:
                 new_guidance = float(user_input.split()[1])
                 if new_guidance < 0:
-                    print("Guidance scale must be positive")
+                    print(wrap_console_text("Guidance scale must be positive"))
                     continue
                 guidance_scale = new_guidance
-                print(f"\nGuidance scale set to: {guidance_scale}")
+                print(wrap_console_text(f"\nGuidance scale set to: {guidance_scale}"))
                 continue
             except (ValueError, IndexError):
-                print("Invalid guidance scale. Usage: /guidance <number>")
+                print(wrap_console_text("Invalid guidance scale. Usage: /guidance <number>"))
                 continue
 
         # If it's not a command, treat it as an idea
@@ -603,18 +609,18 @@ def main():
 
         # Seed logic: new seed unless /same-seed was used
         if generator.use_same_seed_next:
-            print(f"\nUsing the same seed as previous: {generator.current_seed}")
+            print(wrap_console_text(f"\nUsing the same seed as previous: {generator.current_seed}"))
             generator.use_same_seed_next = False
             waiting_for_idea_after_same_seed = False
         else:
             generator.current_seed = torch.randint(0, 2**32 - 1, (1,)).item()
-            print(f"\nNew random seed for this generation: {generator.current_seed}")
+            print(wrap_console_text(f"\nNew random seed for this generation: {generator.current_seed}"))
 
         try:
             enhanced_prompt, negative_prompt = generator.get_prompt_from_lmstudio(original_idea_for_generation)
-            print(f"\nGenerated prompt: {enhanced_prompt}")
+            print(wrap_console_text(f"\nGenerated prompt: {enhanced_prompt}"))
             if negative_prompt:
-                print(f"Negative prompt: {negative_prompt}")
+                print(wrap_console_text(f"Negative prompt: {negative_prompt}"))
             image = generator.generate_image(original_idea_for_generation, 
                                              enhanced_prompt, negative_prompt, 
                                              num_inference_steps=generator.num_steps,
