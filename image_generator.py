@@ -33,6 +33,20 @@ class ImageGenerator:
         try:
             self.use_sdxl = use_sdxl
             self.model_name_for_prompt = model_name_for_prompt or ("Stable Diffusion XL" if use_sdxl else "Stable Diffusion 3.5 Medium")
+            # Initialize conversation history for LM Studio
+            self.conversation_history = [
+                {
+                    "role": "system",
+                    "content": (
+                        f"You are a creative AI assistant that helps craft detailed and effective prompts for {self.model_name_for_prompt}. "
+                        "For every reply, output exactly two lines and nothing else:\n"
+                        "Line 1: The positive prompt (concise, <60 words, no explanations, no extra lines)\n"
+                        "Line 2: The negative prompt, starting with 'Negative: ...'\n"
+                        "Never include explanations, sections, or extra formatting. Only output the two lines."
+                    )
+                }
+            ]
+            self.lmstudio_url = "http://127.0.0.1:1234/v1/chat/completions"
             if pipeline_class is None:
                 if use_sdxl:
                     pipeline_class = StableDiffusionXLPipeline
@@ -59,6 +73,7 @@ class ImageGenerator:
             self.use_same_seed_next = False
             self.common_prompt_rules = None  # Not printed
             # Loading pipeline
+            dtype = torch.float32
             if torch.backends.mps.is_available():
                 dtype = torch.float32
             if model_path:
@@ -190,10 +205,16 @@ class ImageGenerator:
         """Reset the conversation history and generate a new seed"""
         # Modified system prompt
         self.conversation_history = [
-            {"role": "system", "content": f"""You are a creative AI assistant that helps craft detailed and effective prompts for {self.model_name_for_prompt}. 
-            Your task is to create coherent, evolving prompts that maintain and build upon previous details.
-            
-            {self.common_prompt_rules}"""}
+            {
+                "role": "system",
+                "content": (
+                    f"You are a creative AI assistant that helps craft detailed and effective prompts for {self.model_name_for_prompt}. "
+                    "For every reply, output exactly two lines and nothing else:\n"
+                    "Line 1: The positive prompt (concise, <60 words, no explanations, no extra lines)\n"
+                    "Line 2: The negative prompt, starting with 'Negative: ...'\n"
+                    "Never include explanations, sections, or extra formatting. Only output the two lines."
+                )
+            }
         ]
         self.current_seed = torch.randint(0, 2**32 - 1, (1,)).item()
         print("\nConversation history has been reset.")
