@@ -30,7 +30,7 @@ def debug_torch_device():
     print(f"Current working directory: {os.getcwd()}")
     print(f"Python executable: {sys.executable}")
 
-def wrap_console_text(text, words_per_line=20):
+def wrap_console_text(text, words_per_line=13):
     words = text.split()
     lines = [" ".join(words[i:i+words_per_line]) for i in range(0, len(words), words_per_line)]
     return "\n".join(lines)
@@ -64,6 +64,7 @@ class ImageGenerator:
             self.refiner = None
             # Only print model name once
             print(wrap_console_text(f"Model: {self.model_name_for_prompt}"))
+            print()
             # Only print device info if needed
             # Debug device information (optional, comment out if not needed)
             # debug_torch_device()
@@ -120,6 +121,7 @@ class ImageGenerator:
     def get_prompt_from_lmstudio(self, user_input):
         """Get an enhanced prompt from LMStudio, update dimensions if specified."""
         print("\nGetting creative prompt from LMStudio...")
+        print()
         headers = {
             "Content-Type": "application/json"
         }
@@ -133,6 +135,7 @@ class ImageGenerator:
             # Update the persistent dimensions for the session
             self.current_dimensions = (width, height)
             print(wrap_console_text(f"Dimensions updated to: {self.current_dimensions[0]}x{self.current_dimensions[1]}"))
+            print()
             # Remove the dimension specification from the input passed to LM Studio
             original_input_for_lm = re.sub(r'\[?(\d+)x(\d+)\]?', '', user_input).strip()
         
@@ -212,6 +215,7 @@ class ImageGenerator:
                     diff_lines = list(diff)
                     if diff_lines:
                         print(wrap_console_text("\nPrompt diff (previous → current):"))
+                        print()
                         for line in diff_lines:
                             print(wrap_console_text(line))
                 self._last_prompt = prompt
@@ -263,10 +267,12 @@ class ImageGenerator:
 
     def generate_image(self, original_idea: str, prompt, negative_prompt=None, num_inference_steps=50, guidance_scale=7.5):
         self.idea_history.append(original_idea)
-        print(wrap_console_text(f"\nGenerating: {prompt[:80]}{'...' if len(prompt) > 80 else ''}"))
+        # print(wrap_console_text(f"\nGenerating: {prompt[:80]}{'...' if len(prompt) > 80 else ''}"))
+        # print()
         width, height = self.current_dimensions
         # Only print key parameters
         print(wrap_console_text(f"Seed: {self.current_seed} | Steps: {num_inference_steps} | Size: {width}x{height}"))
+        print()
         try:
             start_time = time.time()
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -292,6 +298,7 @@ class ImageGenerator:
             refined_image = base_image
             duration = time.time() - start_time
             print(wrap_console_text(f"\nDone in {duration:.1f}s."))
+            print()
             return refined_image
         except Exception as e:
             print(f"Error generating image: {str(e)}")
@@ -316,6 +323,7 @@ class ImageGenerator:
                 filename = self.create_filename(prompt)
                 image.save(filename)
                 print(wrap_console_text(f"Saved: {filename}"))
+                print()
                 if platform.system() == 'Darwin':
                     subprocess.run(['open', filename])
                 elif platform.system() == 'Windows':
@@ -363,8 +371,11 @@ def main():
     model_path, pipeline_class, model_name_for_prompt = model_map[selected_model_id]
 
     print(wrap_console_text("\nStarting Image Generator..."))
+    print()
     print(wrap_console_text(f"Using {model_name_for_prompt} model."))
+    print()
     print(wrap_console_text("Make sure LMStudio is running at http://127.0.0.1:1234"))
+    print()
     
     # Only SDXL should set use_sdxl True
     use_sdxl = (selected_model_id == 'sdxl')
@@ -380,15 +391,18 @@ def main():
     if torch.backends.mps.is_available():
         generator.device = 'mps'
         print(wrap_console_text("\nUsing MPS for this model"))
+        print()
     else:
         generator.device = 'cpu'
         print(wrap_console_text("\nMPS not available, using CPU"))
+        print()
     generator.pipeline = generator.pipeline.to(generator.device)
     
     # If --steps is provided, set the number of steps
     if args.steps:
         generator.num_steps = args.steps
         print(wrap_console_text(f"\nNumber of steps set to: {generator.num_steps}"))
+        print()
     
     # Set the sampler based on the argument
     sampler_map = {
@@ -407,17 +421,20 @@ def main():
     if args.sampler in sampler_map:
         generator.pipeline.scheduler = sampler_map[args.sampler].from_config(generator.pipeline.scheduler.config)
         print(wrap_console_text(f"\nUsing {args.sampler.upper()} sampler"))
+        print()
     else:
         print(wrap_console_text(f"\nUnknown sampler: {args.sampler}"))
     
     # Set initial guidance scale
     guidance_scale = args.guidance
     print(wrap_console_text(f"\nGuidance scale set to: {guidance_scale}"))
+    print()
     
     # Set detail mode
     generator.show_detail = args.detail
     if generator.show_detail:
         print(wrap_console_text("\nDetailed intermediate images will be shown throughout the entire generation process"))
+        print()
     
     if args.all:
         if not args.idea:
@@ -427,6 +444,7 @@ def main():
         for model_id in all_model_ids:
             model_path, pipeline_class, model_name_for_prompt = model_map[model_id]
             print(wrap_console_text(f"\n--- Running with {model_name_for_prompt} ---"))
+            print()
             use_sdxl = (model_id == 'sdxl')
             generator = ImageGenerator(
                 model_path=args.model if args.model else model_path,
@@ -439,25 +457,30 @@ def main():
             if torch.backends.mps.is_available():
                 generator.device = 'mps'
                 print(wrap_console_text("\nUsing MPS for this model"))
+                print()
             else:
                 generator.device = 'cpu'
                 print(wrap_console_text("\nMPS not available, using CPU"))
+                print()
             generator.pipeline = generator.pipeline.to(generator.device)
             # If --steps is provided, set the number of steps
             if args.steps:
                 generator.num_steps = args.steps
                 print(wrap_console_text(f"\nNumber of steps set to: {generator.num_steps}"))
+                print()
             # Set the sampler based on the argument
             if args.sampler in sampler_map:
                 generator.pipeline.scheduler = sampler_map[args.sampler].from_config(generator.pipeline.scheduler.config)
                 print(wrap_console_text(f"\nUsing {args.sampler.upper()} sampler"))
+                print()
             else:
                 print(wrap_console_text(f"\nUnknown sampler: {args.sampler}"))
-            guidance_scale = args.guidance
             print(wrap_console_text(f"\nGuidance scale set to: {guidance_scale}"))
+            print()
             generator.show_detail = args.detail
             if generator.show_detail:
                 print(wrap_console_text("\nDetailed intermediate images will be shown throughout the entire generation process"))
+                print()
             try:
                 enhanced_prompt, negative_prompt = generator.get_prompt_from_lmstudio(args.idea)
                 print(wrap_console_text(f"\nGenerated prompt: {enhanced_prompt}"))
@@ -480,8 +503,10 @@ def main():
             print(f"Warning: {args.sampler} is not a recognized sampler, will use all supported samplers.")
         # Use the selected model only
         print(wrap_console_text(f"\n--- Running {model_name_for_prompt} with all samplers ---"))
+        print()
         for sampler in sampler_names:
             print(wrap_console_text(f"\n--- Using sampler: {sampler.upper()} ---"))
+            print()
             generator = ImageGenerator(
                 model_path=args.model if args.model else model_path,
                 pipeline_class=pipeline_class,
@@ -493,20 +518,26 @@ def main():
             if torch.backends.mps.is_available():
                 generator.device = 'mps'
                 print(wrap_console_text("\nUsing MPS for this model"))
+                print()
             else:
                 generator.device = 'cpu'
                 print(wrap_console_text("\nMPS not available, using CPU"))
+                print()
             generator.pipeline = generator.pipeline.to(generator.device)
             if args.steps:
                 generator.num_steps = args.steps
                 print(wrap_console_text(f"\nNumber of steps set to: {generator.num_steps}"))
+                print()
             generator.pipeline.scheduler = sampler_map[sampler].from_config(generator.pipeline.scheduler.config)
             print(wrap_console_text(f"\nUsing {sampler.upper()} sampler"))
+            print()
             guidance_scale = args.guidance
             print(wrap_console_text(f"\nGuidance scale set to: {guidance_scale}"))
+            print()
             generator.show_detail = args.detail
             if generator.show_detail:
                 print(wrap_console_text("\nDetailed intermediate images will be shown throughout the entire generation process"))
+                print()
             try:
                 enhanced_prompt, negative_prompt = generator.get_prompt_from_lmstudio(args.idea)
                 print(wrap_console_text(f"\nGenerated prompt: {enhanced_prompt}"))
@@ -551,11 +582,17 @@ def main():
     
     # Interactive mode
     print(wrap_console_text("Type '/reset' to reset the conversation history"))
+    print()
     print(wrap_console_text("Type '/steps <number>' to change the number of inference steps (default: 75)"))
+    print()
     print(wrap_console_text("Type '/guidance <number>' to change the guidance scale (default: 7.5)"))
+    print()
     print(wrap_console_text("Type '/new-seed' to generate a new random seed for the next image"))
+    print()
     print(wrap_console_text("Type '/same-seed' to use the same seed for the next image only"))
+    print()
     print(wrap_console_text("Type '/quit' to exit"))
+    print()
     
     waiting_for_idea_after_same_seed = False
 
