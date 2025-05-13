@@ -476,14 +476,13 @@ def main():
                       help='Show detailed intermediate images throughout the entire generation process')
     parser.add_argument('--skip-refiner', action='store_true', help='Skip the SDXL refiner step (if SDXL 1.0 is used)')
     parser.add_argument('--model', type=str, help='Path to a local model directory or .safetensors file')
-    parser.add_argument('--model_id', type=str, choices=['sd35medium', 'sdxl', 'sd15', 'sd14'], default='sd35medium', help='Select the model: sd35medium (default), sdxl, sd15, sd14')
+    parser.add_argument('--model_id', type=str, choices=['sdxl', 'sd15', 'sd14'], default='sdxl', help='Select the model: sdxl (default), sd15, sd14')
     parser.add_argument('--all', action='store_true', help='Run the prompt through all supported models (requires --idea)')
     parser.add_argument('--all_samplers', action='store_true', help='Run the selected model with all supported samplers (requires --idea)')
     args = parser.parse_args()
 
     # Map model_id to Hugging Face repo and pipeline class
     model_map = {
-        'sd35medium': ('stabilityai/stable-diffusion-3.5-medium', StableDiffusion3Pipeline, 'Stable Diffusion 3.5 Medium'),
         'sdxl': ('stabilityai/stable-diffusion-xl-base-1.0', StableDiffusionXLPipeline, 'Stable Diffusion XL 1.0'),
         'sd15': ('runwayml/stable-diffusion-v1-5', StableDiffusionPipeline, 'Stable Diffusion 1.5'),
         'sd14': ('CompVis/stable-diffusion-v1-4', StableDiffusionPipeline, 'Stable Diffusion 1.4'),
@@ -505,11 +504,8 @@ def main():
         use_sdxl=use_sdxl,
         model_id=selected_model_id
     )
-    # Set device: use CPU for SD 3.5 Medium, MPS for all others (if available)
-    if selected_model_id == 'sd35medium':
-        generator.device = 'cpu'
-        print("\nForcing CPU for SD 3.5 Medium (default)")
-    elif torch.backends.mps.is_available():
+    # Set device: use MPS for all models if available, otherwise CPU
+    if torch.backends.mps.is_available():
         generator.device = 'mps'
         print("\nUsing MPS for this model")
     else:
@@ -555,7 +551,7 @@ def main():
         if not args.idea:
             print("Error: --all requires --idea to be specified.")
             return
-        all_model_ids = ['sd35medium', 'sdxl', 'sd15', 'sd14']
+        all_model_ids = ['sdxl', 'sd15', 'sd14']
         for model_id in all_model_ids:
             model_path, pipeline_class, model_name_for_prompt = model_map[model_id]
             print(f"\n--- Running with {model_name_for_prompt} ---")
@@ -567,11 +563,8 @@ def main():
                 use_sdxl=use_sdxl,
                 model_id=model_id
             )
-            # Set device: use CPU for SD 3.5 Medium, MPS for all others (if available)
-            if model_id == 'sd35medium':
-                generator.device = 'cpu'
-                print("\nForcing CPU for SD 3.5 Medium (default)")
-            elif torch.backends.mps.is_available():
+            # Set device: use MPS for all models if available, otherwise CPU
+            if torch.backends.mps.is_available():
                 generator.device = 'mps'
                 print("\nUsing MPS for this model")
             else:
@@ -624,11 +617,8 @@ def main():
                 use_sdxl=use_sdxl,
                 model_id=selected_model_id
             )
-            # Set device: use CPU for SD 3.5 Medium, MPS for all others (if available)
-            if selected_model_id == 'sd35medium':
-                generator.device = 'cpu'
-                print("\nForcing CPU for SD 3.5 Medium (default)")
-            elif torch.backends.mps.is_available():
+            # Set device: use MPS for all models if available, otherwise CPU
+            if torch.backends.mps.is_available():
                 generator.device = 'mps'
                 print("\nUsing MPS for this model")
             else:
