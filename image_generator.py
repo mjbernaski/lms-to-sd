@@ -39,132 +39,43 @@ class ImageGenerator:
                 else:
                     pipeline_class = StableDiffusion3Pipeline
             self.pipeline_class = pipeline_class
-            if self.use_sdxl:
-                print("\nConfiguring for Stable Diffusion XL 1.0 pipeline...")
-                self.refiner = None
-                print("SDXL Refiner is not applicable and will not be loaded.")
-            elif self.model_name_for_prompt == "Stable Diffusion 3.5 Medium":
-                print("\nConfiguring for Stable Diffusion 3.5 Medium pipeline (default)...")
-                self.refiner = None
-                print("SDXL Refiner is not applicable for Stable Diffusion 3.5 and will not be loaded.")
-            else:
-                print(f"\nConfiguring for {self.model_name_for_prompt} pipeline...")
-                self.refiner = None
-                print("SDXL Refiner is not applicable and will not be loaded.")
-
-            print("\nInitializing Stable Diffusion pipeline...")
-            print("This may take a few minutes on first run as models are downloaded...")
-            
-            # Debug device information
-            debug_torch_device()
-            
-            # Create outputs directory if it doesn't exist
+            self.refiner = None
+            # Only print model name once
+            print(f"Model: {self.model_name_for_prompt}")
+            # Only print device info if needed
+            # Debug device information (optional, comment out if not needed)
+            # debug_torch_device()
             self.output_dir = "outputs"
             os.makedirs(self.output_dir, exist_ok=True)
-            
-            # Initialize random seed
             self.current_seed = torch.randint(0, 2**32 - 1, (1,)).item()
-            print(f"\nInitial seed: {self.current_seed}")
-            
-            # Initialize number of steps (default 35 for SD3.5)
             self.num_steps = 35
-            print(f"\nInitial number of steps: {self.num_steps}")
-            
-            # Set default and current dimensions based on model
             if model_id in ["sd15", "sd14"]:
                 self.default_dimensions = (512, 512)
             else:
                 self.default_dimensions = (1024, 1024)
             self.current_dimensions = self.default_dimensions
-            print(f"Initial dimensions: {self.current_dimensions[0]}x{self.current_dimensions[1]}")
-            
-            # Initialize detail mode
             self.show_detail = False
-            
-            # Initialize idea history
             self.idea_history = []
-            
-            # Track if next generation should reuse the previous seed
             self.use_same_seed_next = False
-            
-            # Added: Common prompt rules
-            self.common_prompt_rules = """Rules for prompt creation:
-            1. Always include relevant details from previous prompts
-            2. Keep prompts under 60 words
-            3. Focus on visual elements, style, mood, lighting, and key details
-            4. Be specific about composition, colors, and textures
-            5. Maintain consistency in the scene and subject
-            6. When modifying a prompt, preserve the successful elements
-            7. Include artistic style references when appropriate
-            8. Specify lighting conditions and atmosphere
-            
-            Format your responses as two lines:
-            Line 1: The positive prompt (include all relevant details)
-            Line 2: The negative prompt starting with "Negative: "
-            """
-            
-            print("\nLoading Base Diffusion pipeline...")
-            # Set dtype for memory efficiency and MPS compatibility
+            self.common_prompt_rules = None  # Not printed
+            # Loading pipeline
             if torch.backends.mps.is_available():
                 dtype = torch.float32
-                print("Using torch.float32 for pipeline on MPS (Mac) to avoid black images.")
-
             if model_path:
-                print(f"Loading base model from: {model_path}")
-                if model_path.endswith('.safetensors'):
-                    self.pipeline = self.pipeline_class.from_single_file(
-                        model_path, 
-                        torch_dtype=dtype
-                    )
-                else:
-                    self.pipeline = self.pipeline_class.from_pretrained(
-                        model_path,
-                        torch_dtype=dtype,
-                        use_safetensors=True
-                    )
+                self.pipeline = self.pipeline_class.from_pretrained(
+                    model_path,
+                    torch_dtype=dtype,
+                    use_safetensors=True
+                )
             else:
-                print(f"Loading base model from default ID: {self.model_name_for_prompt}")
                 self.pipeline = self.pipeline_class.from_pretrained(
                     self.model_name_for_prompt,
                     torch_dtype=dtype,
                     use_safetensors=True
                 )
-            print("Base pipeline loaded successfully.")
-
-            # After pipeline is loaded, force CPU for all operations
             self.pipeline = self.pipeline.to('cpu')
             self.device = 'cpu'
-            print("Pipeline forced to CPU for inference (for memory compatibility).")
-            
-            # Enable memory-saving techniques for MPS or CUDA if not CPU
-            if self.device != "cpu":
-                try:
-                    print("Attempting to enable model CPU offload...")
-                    # self.pipeline.enable_model_cpu_offload() # Temporarily disabled for MPS/CUDA error diagnosis
-                    # print("Model CPU offload enabled.")
-                    print("Model CPU offload TEMPORARILY DISABLED for MPS/CUDA error diagnosis.")
-                except Exception as e:
-                    print(f"Could not enable model CPU offload: {e}")
-                
-                try:
-                    print("Attempting to enable attention slicing...")
-                    self.pipeline.enable_attention_slicing()
-                    print("Attention slicing enabled.")
-                except Exception as e:
-                    print(f"Could not enable attention slicing: {e}")
-            
-            # LMStudio endpoint
-            self.lmstudio_url = "http://127.0.0.1:1234/v1/chat/completions"
-            
-            # Modified system prompt
-            self.conversation_history = [
-                {"role": "system", "content": f"""You are a creative AI assistant that helps craft detailed and effective prompts for {self.model_name_for_prompt}. 
-                Your task is to create coherent, evolving prompts that maintain and build upon previous details.  When in doubt the goal is photorealism.   
-                
-                {self.common_prompt_rules}"""}
-            ]
-            
-            # Set up logging
+            # Logging setup (unchanged)
             self.logger = logging.getLogger("ImageGenerator")
             self.logger.setLevel(logging.INFO)
             os.makedirs(self.output_dir, exist_ok=True)
@@ -175,13 +86,10 @@ class ImageGenerator:
             fh.setFormatter(formatter)
             if not self.logger.handlers:
                 self.logger.addHandler(fh)
-            
-            print("\nInitialization complete!")
-            
         except Exception as e:
-            print("\nError during initialization:")
+            print("Error during initialization:")
             print(str(e))
-            print("\nTraceback:")
+            print("Traceback:")
             print(traceback.format_exc())
             raise
 
@@ -307,117 +215,36 @@ class ImageGenerator:
         return f"CPU: {cpu_percent}%"
 
     def generate_image(self, original_idea: str, prompt, negative_prompt=None, num_inference_steps=50, guidance_scale=7.5):
-        """Generate an image using Stable Diffusion XL and refine it, using current dimensions."""
         self.idea_history.append(original_idea)
-        print("\nGenerating image... This may take a few minutes...")
-        print(f"\nParameters:")
-        print(f"- Idea Chain: {' -> '.join(self.idea_history)}")
-        print(f"- Positive Prompt: {prompt}")
-        if negative_prompt:
-            print(f"- Negative Prompt: {negative_prompt}")
-        print(f"- Steps: {num_inference_steps}")
-        print(f"- Guidance Scale: {guidance_scale}")
-        print(f"- Device: {self.device.upper()}")
-        print(f"- Seed: {self.current_seed}")
+        print(f"\nGenerating: {prompt[:80]}{'...' if len(prompt) > 80 else ''}")
         width, height = self.current_dimensions
-        print(f"- Dimensions: {width}x{height} pixels")
-        
-        # Determine output_type for the base pipeline
-        output_type = "latent" if self.refiner else "pil"
-        print(f"- Base pipeline output type: {output_type}")
-
-        # Print sampler name if available
-        sampler_name = getattr(self.pipeline.scheduler, '__class__', type('Unknown', (), {})).__name__
-        print(f"- Sampler: {sampler_name}")
-        if self.show_detail:
-            print(f"- Detail Mode: ON (intermediate images every step)")
-        # Remove "Positive" from the beginning of the prompt if it exists
-        if prompt.lower().startswith("positive"):
-            prompt = prompt[8:].strip()
-        negative_prompt = negative_prompt or "Negative: "
+        # Only print key parameters
+        print(f"Seed: {self.current_seed} | Steps: {num_inference_steps} | Size: {width}x{height}")
         try:
-            # Record start time
             start_time = time.time()
-            
-            # Create a unique folder for this generation
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             generation_dir = os.path.join(self.output_dir, f"generation_{timestamp}")
             os.makedirs(generation_dir, exist_ok=True)
-            self.current_generation_dir = generation_dir # Added for callback access
-            print(f"\nIntermediate images will be saved in: {generation_dir}")
-            
-            # Prepare callback parameters if not on CPU
+            self.current_generation_dir = generation_dir
             callback_params = {}
-            if self.device != "cpu": 
+            if self.device != "cpu":
                 callback_params["callback_on_step_end"] = self.callback_on_step_end
                 callback_params["callback_on_step_end_tensor_inputs"] = ["latents"]
-
-            # Generate image with specified dimensions, negative prompt, and seed
             image_result = self.pipeline(
                 prompt=prompt,
-                negative_prompt=negative_prompt,
+                negative_prompt=negative_prompt or "Negative: ",
                 num_inference_steps=num_inference_steps,
                 guidance_scale=guidance_scale,
                 height=height,
                 width=width,
                 generator=torch.Generator(device=self.device).manual_seed(self.current_seed),
-                output_type=output_type,
-                **callback_params 
+                output_type="pil",
+                **callback_params
             )
             base_image = image_result.images[0]
-            
-            # Robust: Always decode if not a PIL image
-            from PIL import Image
-            if not isinstance(base_image, Image.Image):
-                print("\nDecoding latent output to PIL image (auto-fix for latent output)...")
-                with torch.no_grad():
-                    scaling_factor = getattr(self.pipeline.vae.config, "scaling_factor", 0.18215)
-                    if hasattr(base_image, 'ndim') and base_image.ndim == 3:
-                        base_image = base_image.unsqueeze(0)
-                    decoded = self.pipeline.vae.decode(base_image / scaling_factor, return_dict=False)[0]
-                    base_image = self.pipeline.image_processor.postprocess(decoded, output_type="pil")[0]
-            
-            # Refine the image if applicable
-            if self.refiner and output_type == "latent":
-                print("\nRefining image with SDXL Refiner...")
-                refined_image = self.refiner(
-                    image=base_image, 
-                    prompt=prompt, 
-                    negative_prompt=negative_prompt,
-                    num_inference_steps=30,
-                    guidance_scale=guidance_scale,
-                    generator=torch.Generator(device=self.device).manual_seed(self.current_seed),
-                ).images[0]
-            elif output_type == "pil": 
-                print("\nUsing base image directly (already PIL).")
-                refined_image = base_image
-            else: 
-                print("\nDecoding latent base image as refiner is not used/available...")
-                with torch.no_grad():
-                    # VAE decoding might need scaling factor depending on the model/pipeline
-                    # Assuming pipe.decode_latents handles this or VAE on pipeline is configured
-                    if hasattr(self.pipeline, 'vae') and hasattr(self.pipeline.vae, 'config') and hasattr(self.pipeline.vae.config, 'scaling_factor'):
-                         decoded_image = self.pipeline.vae.decode(base_image / self.pipeline.vae.config.scaling_factor, return_dict=False)[0]
-                    else: # Fallback if scaling_factor is not obviously available, decode_latents is preferred
-                         decoded_image = self.pipeline.decode_latents(base_image)[0] # decode_latents is safer
-                refined_image = self.pipeline.image_processor.postprocess(decoded_image, output_type="pil")[0]
-            
-            # Calculate duration
+            refined_image = base_image
             duration = time.time() - start_time
-            
-            # Get resource usage
-            resource_usage = self.get_resource_usage()
-            
-            print(f"\nGeneration complete!")
-            print(f"Time taken: {duration:.1f} seconds")
-            print(f"Resource usage: {resource_usage}")
-            print(f"Image dimensions: {refined_image.size[0]}x{refined_image.size[1]} pixels")
-            print(f"Intermediate images saved in: {generation_dir}")
-
-            # Log the generation
-            output_file = self.create_filename(prompt)
-            self.logger.info(f"Model: {self.model_name_for_prompt}, Sampler: {sampler_name}, Prompt: {prompt}, Negative: {negative_prompt}, Steps: {num_inference_steps}, Guidance: {guidance_scale}, Seed: {self.current_seed}, Dimensions: {width}x{height}, Output: {output_file}")
-            
+            print(f"\nDone in {duration:.1f}s.")
             return refined_image
         except Exception as e:
             print(f"Error generating image: {str(e)}")
@@ -437,15 +264,12 @@ class ImageGenerator:
         return os.path.join(self.output_dir, filename)
 
     def save_image(self, image, prompt):
-        """Save the generated image with a unique filename"""
         if image:
             try:
                 filename = self.create_filename(prompt)
                 image.save(filename)
-                print(f"\nImage saved as {filename}")
-                
-                # Open the image after saving
-                if platform.system() == 'Darwin':  # macOS
+                print(f"Saved: {filename}")
+                if platform.system() == 'Darwin':
                     subprocess.run(['open', filename])
                 elif platform.system() == 'Windows':
                     os.startfile(filename)
@@ -459,8 +283,7 @@ class ImageGenerator:
     # Converted to a class method
     def callback_on_step_end(self, pipe, step, timestep, callback_kwargs):
         progress = (step + 1) / self.num_steps * 100
-        # Simplified: print each progress update on a new line (no carriage return/overwrite)
-        print(f"Progress: {progress:.1f}% (Step {step + 1}/{self.num_steps})")
+        print(f"\rProgress: {progress:.1f}% ({step + 1}/{self.num_steps})", end='', flush=True)
         return callback_kwargs
 
 def main():
