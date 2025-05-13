@@ -16,6 +16,7 @@ import traceback
 import subprocess
 import argparse
 import logging
+import difflib
 
 def debug_torch_device():
     print("\nDebug information:")
@@ -39,6 +40,7 @@ class ImageGenerator:
                     "role": "system",
                     "content": (
                         f"You are a creative AI assistant that helps craft detailed and effective prompts for {self.model_name_for_prompt}. "
+                        "Always maintain and build upon all relevant details from previous prompts, unless the user says '/reset'. "
                         "For every reply, output exactly two lines and nothing else:\n"
                         "Line 1: The positive prompt (concise, <60 words, no explanations, no extra lines)\n"
                         "Line 2: The negative prompt, starting with 'Negative: ...'\n"
@@ -191,6 +193,21 @@ class ImageGenerator:
                 if len(prompt.split()) > 77:
                     prompt = " ".join(prompt.split()[:77])
                 
+                # Show diff from last prompt unless reset or first prompt
+                if hasattr(self, '_last_prompt') and self._last_prompt is not None:
+                    diff = difflib.unified_diff(
+                        self._last_prompt.split(),
+                        prompt.split(),
+                        lineterm='',
+                        fromfile='previous',
+                        tofile='current'
+                    )
+                    diff_lines = list(diff)
+                    if diff_lines:
+                        print("\nPrompt diff (previous → current):")
+                        for line in diff_lines:
+                            print(line)
+                self._last_prompt = prompt
                 return prompt, negative_prompt
             else:
                 print(f"\nError from LM Studio: {response.status_code}")
@@ -209,6 +226,7 @@ class ImageGenerator:
                 "role": "system",
                 "content": (
                     f"You are a creative AI assistant that helps craft detailed and effective prompts for {self.model_name_for_prompt}. "
+                    "Always maintain and build upon all relevant details from previous prompts, unless the user says '/reset'. "
                     "For every reply, output exactly two lines and nothing else:\n"
                     "Line 1: The positive prompt (concise, <60 words, no explanations, no extra lines)\n"
                     "Line 2: The negative prompt, starting with 'Negative: ...'\n"
@@ -222,6 +240,7 @@ class ImageGenerator:
         self.idea_history = [] # Reset idea history
         self.current_dimensions = self.default_dimensions # Reset dimensions to default
         print(f"Dimensions reset to default: {self.current_dimensions[0]}x{self.current_dimensions[1]}")
+        self._last_prompt = None
 
     def get_resource_usage(self):
         """Get current CPU and GPU usage"""
