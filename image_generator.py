@@ -74,6 +74,7 @@ class ImageGenerator:
             self.idea_history = []
             self.use_same_seed_next = False
             self.common_prompt_rules = None  # Not printed
+            self.show_diff = False
             # Loading pipeline
             dtype = torch.float32
             if torch.backends.mps.is_available():
@@ -193,8 +194,8 @@ class ImageGenerator:
                 if len(prompt.split()) > 77:
                     prompt = " ".join(prompt.split()[:77])
                 
-                # Show diff from last prompt unless reset or first prompt
-                if hasattr(self, '_last_prompt') and self._last_prompt is not None:
+                # Show diff from last prompt unless reset or first prompt, and only if show_diff is set
+                if getattr(self, 'show_diff', False) and hasattr(self, '_last_prompt') and self._last_prompt is not None:
                     diff = difflib.unified_diff(
                         self._last_prompt.split(),
                         prompt.split(),
@@ -342,6 +343,7 @@ def main():
     parser.add_argument('--model_id', type=str, choices=['sdxl', 'sd15', 'sd14'], default='sdxl', help='Select the model: sdxl (default), sd15, sd14')
     parser.add_argument('--all', action='store_true', help='Run the prompt through all supported models (requires --idea)')
     parser.add_argument('--all_samplers', action='store_true', help='Run the selected model with all supported samplers (requires --idea)')
+    parser.add_argument('--diff', action='store_true', help='Show the diff between the last and new prompt')
     args = parser.parse_args()
 
     # Map model_id to Hugging Face repo and pipeline class
@@ -367,6 +369,7 @@ def main():
         use_sdxl=use_sdxl,
         model_id=selected_model_id
     )
+    generator.show_diff = args.diff
     # Set device: use MPS for all models if available, otherwise CPU
     if torch.backends.mps.is_available():
         generator.device = 'mps'
