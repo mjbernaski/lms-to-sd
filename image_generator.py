@@ -1,3 +1,22 @@
+import os
+os.environ["DIFFUSERS_PROGRESS_BAR"] = "off"
+os.environ["TRANSFORMERS_NO_TQDM"] = "1"
+# Robustly suppress tqdm output globally
+try:
+    import tqdm
+    class DummyTqdm:
+        def __init__(self, *a, **k): pass
+        def update(self, *a, **k): return self
+        def close(self, *a, **k): return self
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def write(self, *a, **k): pass
+        def set_description(self, *a, **k): pass
+        def set_postfix(self, *a, **k): pass
+        def __iter__(self): return iter([])
+    tqdm.tqdm = DummyTqdm
+except ImportError:
+    pass
 import requests
 import json
 from diffusers import StableDiffusionXLPipeline, StableDiffusion3Pipeline, StableDiffusionPipeline, DPMSolverMultistepScheduler, EulerDiscreteScheduler, LMSDiscreteScheduler, PNDMScheduler, StableDiffusionXLImg2ImgPipeline
@@ -50,12 +69,17 @@ class ImageGenerator:
                 {
                     "role": "system",
                     "content": (
-                        f"You are a creative AI assistant that helps craft detailed and effective prompts for {self.model_name_for_prompt}. "
-                        "Always maintain and build upon all relevant details from previous prompts, unless the user says '/reset'. "
-                        "For every reply, output exactly two lines and nothing else:\n"
-                        "Line 1: The positive prompt (concise, <60 words, no explanations, no extra lines)\n"
-                        "Line 2: The negative prompt, starting with 'Negative: ...'\n"
-                        "Never include explanations, sections, or extra formatting. Only output the two lines."
+                        f"You are an expert prompt engineer for Stable Diffusion. For every reply, output exactly two lines and nothing else:\n"
+                        "Line 1: A concise, visual description for an image (<60 words, no explanations, no extra lines, do not include the word 'prompt', do not explain or reference the prompt, do not use quotes).\n"
+                        "Line 2: Negative: followed by a comma-separated list of visual flaws to avoid (e.g., ugly, blurry, deformed, watermark, text, extra limbs, asymmetrical eyes, etc.).\n"
+                        "Never include explanations, never reference the prompt, never use quotes, never output anything except the two lines.\n"
+                        "Examples:\n"
+                        "A photorealistic portrait of a Roman emperor, dramatic lighting, laurel wreath, marble background\n"
+                        "Negative: ugly, blurry, deformed, watermark, text, extra limbs, asymmetrical eyes\n"
+                        "A lush forest landscape at sunrise, misty atmosphere, sunbeams through trees, high detail\n"
+                        "Negative: blurry, lowres, cartoon, watermark, text, extra limbs, deformed\n"
+                        "A futuristic city skyline at night, neon lights, reflections on water, cinematic\n"
+                        "Negative: ugly, blurry, deformed, watermark, text, extra limbs, lowres, asymmetrical\n"
                     )
                 }
             ]
@@ -181,32 +205,60 @@ class ImageGenerator:
                 # Extract prompt and negative prompt
                 prompt = None
                 negative_prompt = None
-                
-                # Look for the description/prompt, skipping junk tokens
+                # Post-processing: filter out lines with explanations, quotes, or irrelevant content
+                filtered_parts = []
                 for part in content_parts:
+                    part_stripped = part.strip()
+                    # Skip lines with quotes, explanations, or irrelevant phrases
+                    if (
+                        not part_stripped
+                        or '"' in part_stripped
+                        or "'" in part_stripped
+                        or 'is a famous line' in part_stripped.lower()
+                        or 'should not be associated' in part_stripped.lower()
+                        or 'explanation' in part_stripped.lower()
+                        or 'reference' in part_stripped.lower()
+                        or part_stripped.lower().startswith('this prompt')
+                        or part_stripped.lower().startswith('line 1:')
+                        or part_stripped.lower().startswith('line 2:')
+                    ):
+                        continue
+                    filtered_parts.append(part_stripped)
+                # Now extract prompt and negative prompt from filtered parts
+                for part in filtered_parts:
                     part_lower = part.lower().strip()
                     if part_lower in JUNK_TOKENS:
                         continue  # skip junk
                     if part.startswith("Description:"):
                         prompt = part.replace("Description:", "").strip()
                         break
+                    elif part.startswith("Positive:"):
+                        prompt = part.replace("Positive:", "").strip()
+                        break
                     elif not part.startswith("Negative:"):
                         prompt = part.strip()
                         break
-                
-                # Look for negative prompt
-                for part in content_parts:
+                for part in filtered_parts:
                     if part.startswith("Negative:"):
                         negative_prompt = part.replace("Negative:", "").strip()
                         break
-                
                 # If no prompt found or it's junk, use original input
                 if not prompt or prompt.lower().strip() in JUNK_TOKENS:
                     prompt = original_input_for_lm.replace("/nothink ", "")
-                
                 # Ensure the prompt isn't too long
                 if len(prompt.split()) > 77:
                     prompt = " ".join(prompt.split()[:77])
+                # Always provide a standard negative prompt if missing
+                DEFAULT_NEGATIVE_PROMPT = "ugly, blurry, deformed, mutated, extra limbs, extra digits, watermark, signature, text, out of frame, duplicate, lowres, jpeg artifacts, asymmetrical eyes, crossed eyes, lazy eye, off-center eyes, distorted eyes, missing eyes, extra eyes, hollow eyes, unrealistic eyes, eye deformation"
+                if not negative_prompt or not negative_prompt.strip():
+                    negative_prompt = DEFAULT_NEGATIVE_PROMPT
+                # Fallback: if the prompt is not visually descriptive (e.g., contains 'famous line', 'should not be associated', or is too short), use the original input
+                if (
+                    'famous line' in prompt.lower()
+                    or 'should not be associated' in prompt.lower()
+                    or len(prompt.split()) < 3
+                ):
+                    prompt = original_input_for_lm.replace("/nothink ", "")
                 
                 # Show diff from last prompt unless reset or first prompt, and only if show_diff is set
                 if getattr(self, 'show_diff', False) and hasattr(self, '_last_prompt') and self._last_prompt is not None:
@@ -241,12 +293,17 @@ class ImageGenerator:
             {
                 "role": "system",
                 "content": (
-                    f"You are a creative AI assistant that helps craft detailed and effective prompts for {self.model_name_for_prompt}. "
-                    "Always maintain and build upon all relevant details from previous prompts, unless the user says '/reset'. "
-                    "For every reply, output exactly two lines and nothing else:\n"
-                    "Line 1: The positive prompt (concise, <60 words, no explanations, no extra lines)\n"
-                    "Line 2: The negative prompt, starting with 'Negative: ...'\n"
-                    "Never include explanations, sections, or extra formatting. Only output the two lines."
+                    f"You are an expert prompt engineer for Stable Diffusion. For every reply, output exactly two lines and nothing else:\n"
+                    "Line 1: A concise, visual description for an image (<60 words, no explanations, no extra lines, do not include the word 'prompt', do not explain or reference the prompt, do not use quotes).\n"
+                    "Line 2: Negative: followed by a comma-separated list of visual flaws to avoid (e.g., ugly, blurry, deformed, watermark, text, extra limbs, asymmetrical eyes, etc.).\n"
+                    "Never include explanations, never reference the prompt, never use quotes, never output anything except the two lines.\n"
+                    "Examples:\n"
+                    "A photorealistic portrait of a Roman emperor, dramatic lighting, laurel wreath, marble background\n"
+                    "Negative: ugly, blurry, deformed, watermark, text, extra limbs, asymmetrical eyes\n"
+                    "A lush forest landscape at sunrise, misty atmosphere, sunbeams through trees, high detail\n"
+                    "Negative: blurry, lowres, cartoon, watermark, text, extra limbs, deformed\n"
+                    "A futuristic city skyline at night, neon lights, reflections on water, cinematic\n"
+                    "Negative: ugly, blurry, deformed, watermark, text, extra limbs, lowres, asymmetrical\n"
                 )
             }
         ]
@@ -298,11 +355,7 @@ class ImageGenerator:
                 transient=True,
             ) as progress:
                 task = progress.add_task("Generating image...", total=num_inference_steps)
-                def rich_callback(pipe, step, timestep, callback_kwargs):
-                    progress.update(task, completed=step+1)
-                    return callback_kwargs
-                if self.device != "cpu":
-                    callback_params["callback_on_step_end"] = rich_callback
+                # Only update progress bar if needed (handled by diffusers if callback is set)
                 image_result = self.pipeline(
                     prompt=prompt,
                     negative_prompt=negative_prompt or "Negative: ",
@@ -312,6 +365,7 @@ class ImageGenerator:
                     width=width,
                     generator=torch.Generator(device=self.device).manual_seed(self.current_seed),
                     output_type="pil",
+                    progress_bar=False,
                     **callback_params
                 )
             base_image = image_result.images[0]
@@ -357,8 +411,7 @@ class ImageGenerator:
 
     # Converted to a class method
     def callback_on_step_end(self, pipe, step, timestep, callback_kwargs):
-        progress = (step + 1) / self.num_steps * 100
-        print(f"\rProgress: {progress:.1f}% ({step + 1}/{self.num_steps})", end='', flush=True)
+        # No-op: Rich progress bar already handles progress display on one line
         return callback_kwargs
 
 def main():
