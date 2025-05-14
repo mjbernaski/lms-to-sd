@@ -37,11 +37,6 @@ import argparse
 import logging
 import difflib
 import textwrap
-from rich import print
-from rich.progress import Progress, BarColumn, TextColumn, TimeElapsedColumn, SpinnerColumn
-from rich.traceback import install
-
-install()  # Enable Rich tracebacks for better error messages
 
 def debug_torch_device():
     print("\nDebug information:")
@@ -347,29 +342,20 @@ class ImageGenerator:
             if self.device != "cpu":
                 callback_params["callback_on_step_end"] = self.callback_on_step_end
                 callback_params["callback_on_step_end_tensor_inputs"] = ["latents"]
-            # Use Rich progress bar for image generation
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                "[progress.percentage]{task.percentage:>3.0f}%",
-                TimeElapsedColumn(),
-                transient=True,
-            ) as progress:
-                task = progress.add_task("Generating image...", total=num_inference_steps)
-                # Only update progress bar if needed (handled by diffusers if callback is set)
-                image_result = self.pipeline(
-                    prompt=prompt,
-                    negative_prompt=negative_prompt or "Negative: ",
-                    num_inference_steps=num_inference_steps,
-                    guidance_scale=guidance_scale,
-                    height=height,
-                    width=width,
-                    generator=torch.Generator(device=self.device).manual_seed(self.current_seed),
-                    output_type="pil",
-                    progress_bar=False,
-                    **callback_params
-                )
+            # Remove Rich progress bar, just print start and end
+            print("Generating image... (this may take a while)")
+            image_result = self.pipeline(
+                prompt=prompt,
+                negative_prompt=negative_prompt or "Negative: ",
+                num_inference_steps=num_inference_steps,
+                guidance_scale=guidance_scale,
+                height=height,
+                width=width,
+                generator=torch.Generator(device=self.device).manual_seed(self.current_seed),
+                output_type="pil",
+                progress_bar=False,
+                **callback_params
+            )
             base_image = image_result.images[0]
             refined_image = base_image
             duration = time.time() - start_time
@@ -377,7 +363,7 @@ class ImageGenerator:
             print()
             return refined_image
         except Exception as e:
-            print(f"[bold red]Error generating image:[/bold red] {str(e)}")
+            print(f"Error generating image: {str(e)}")
             return None
 
     def create_filename(self, prompt):
@@ -407,13 +393,13 @@ class ImageGenerator:
                 elif platform.system() == 'Linux':
                     subprocess.run(['xdg-open', filename])
             except Exception as e:
-                print(f"[bold red]Error saving image:[/bold red] {str(e)}")
+                print(f"Error saving image: {str(e)}")
         else:
-            print("[yellow]No image to save[/yellow]")
+            print("No image to save")
 
     # Converted to a class method
     def callback_on_step_end(self, pipe, step, timestep, callback_kwargs):
-        # No-op: Rich progress bar already handles progress display on one line
+        # No-op: progress bar removed
         return callback_kwargs
 
 def main():
