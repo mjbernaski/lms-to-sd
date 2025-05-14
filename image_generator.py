@@ -111,6 +111,7 @@ class ImageGenerator:
             self.use_same_seed_next = False
             self.common_prompt_rules = None  # Not printed
             self.show_diff = False
+            self.cumulative_idea = ""  # <-- Add cumulative idea string
             # Loading pipeline
             dtype = torch.float32
             if torch.backends.mps.is_available():
@@ -314,6 +315,7 @@ class ImageGenerator:
         self.current_dimensions = self.default_dimensions # Reset dimensions to default
         print(wrap_console_text(f"Dimensions reset to default: {self.current_dimensions[0]}x{self.current_dimensions[1]}"))
         self._last_prompt = None
+        self.cumulative_idea = ""  # <-- Reset cumulative idea
 
     def get_resource_usage(self):
         """Get current CPU and GPU usage"""
@@ -717,6 +719,12 @@ def main():
         # If it's not a command, treat it as an idea
         original_idea_for_generation = user_input
 
+        # Cumulative idea logic
+        if generator.cumulative_idea:
+            generator.cumulative_idea += " + " + user_input
+        else:
+            generator.cumulative_idea = user_input
+
         # Seed logic: new seed unless /same-seed was used
         if generator.use_same_seed_next:
             print(wrap_console_text(f"\nUsing the same seed as previous: {generator.current_seed}"))
@@ -727,7 +735,8 @@ def main():
             print(wrap_console_text(f"\nNew random seed for this generation: {generator.current_seed}"))
 
         try:
-            enhanced_prompt, negative_prompt = generator.get_prompt_from_lmstudio(original_idea_for_generation)
+            # Use cumulative idea for prompt generation
+            enhanced_prompt, negative_prompt = generator.get_prompt_from_lmstudio(generator.cumulative_idea)
             print(wrap_console_text(f"\nGenerated prompt: {enhanced_prompt}"))
             if negative_prompt:
                 print(wrap_console_text(f"Negative prompt: {negative_prompt}"))
