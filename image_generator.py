@@ -39,15 +39,21 @@ import difflib
 import textwrap
 
 def debug_torch_device():
-    print("\nDebug information:")
-    print(f"PyTorch version: {torch.__version__}")
-    print(f"MPS available: {torch.backends.mps.is_available()}")
-    print(f"MPS built: {torch.backends.mps.is_built()}")
-    print(f"CUDA available: {torch.cuda.is_available()}")
-    print(f"Platform: {platform.platform()}")
-    print(f"Python version: {sys.version}")
-    print(f"Current working directory: {os.getcwd()}")
-    print(f"Python executable: {sys.executable}")
+    from pydantic import BaseModel
+
+    class PromptResponse(BaseModel):
+        positive_prompt: str
+        negative_prompt: str
+
+    def get_formatted_prompt() -> PromptResponse:
+        response = requests.post(
+            self.lmstudio_url,
+            json={
+                "messages": self.conversation_history,
+                "response_format": {"type": "json_object"}
+            }
+        )
+        return PromptResponse.model_validate_json(response.json()["choices"][0]["message"]["content"])
 
 def wrap_console_text(text, words_per_line=13):
     words = text.split()
@@ -143,7 +149,7 @@ class ImageGenerator:
             print(traceback.format_exc())
             raise
 
-    def get_prompt_from_lmstudio(self, user_input):
+    def get_prompt_from_lmstudio(self, user_input, last_prompt=None):
         """Get an enhanced prompt from LMStudio, update dimensions if specified."""
         print("\nGetting creative prompt from LMStudio...")
         print()
@@ -164,8 +170,16 @@ class ImageGenerator:
             # Remove the dimension specification from the input passed to LM Studio
             original_input_for_lm = re.sub(r'\[?(\d+)x(\d+)\]?', '', user_input).strip()
         
+        # Compose the message for LM Studio
+        if last_prompt:
+            lm_studio_input = (
+                f"Here is the current prompt: {last_prompt}. Please rewrite or enhance it with this new idea: {original_input_for_lm}"
+            )
+        else:
+            lm_studio_input = original_input_for_lm
+        
         # Add /nothink to prevent thinking output
-        lm_studio_input = f"/nothink {original_input_for_lm}"
+        lm_studio_input = f"/nothink {lm_studio_input}"
         
         # Add the user's input (without dimensions) to the conversation history
         self.conversation_history.append({
@@ -289,17 +303,16 @@ class ImageGenerator:
             {
                 "role": "system",
                 "content": (
-                    f"You are an expert prompt engineer for Stable Diffusion. For every reply, output exactly two lines and nothing else:\n"
-                    "Line 1: A concise, visual description for an image (<60 words, no explanations, no extra lines, do not include the word 'prompt', do not explain or reference the prompt, do not use quotes).\n"
-                    "Line 2: Negative: followed by a comma-separated list of visual flaws to avoid (e.g., ugly, blurry, deformed, watermark, text, extra limbs, asymmetrical eyes, etc.).\n"
-                    "Never include explanations, never reference the prompt, never use quotes, never output anything except the two lines.\n"
+                    "You are a Stable Diffusion prompt expert. For each reply, give a vivid image description under 60 words, followed by a list of flaws to avoid.\n"
+                    "Do not use quotes, explanations, or extra lines. Never reference the prompt.\n"
+                    "Begin with the image description. Then write 'Negative:' followed by a comma-separated list of visual flaws (e.g., blurry, deformed, watermark, extra limbs).\n"
                     "Examples:\n"
                     "A photorealistic portrait of a Roman emperor, dramatic lighting, laurel wreath, marble background\n"
                     "Negative: ugly, blurry, deformed, watermark, text, extra limbs, asymmetrical eyes\n"
                     "A lush forest landscape at sunrise, misty atmosphere, sunbeams through trees, high detail\n"
                     "Negative: blurry, lowres, cartoon, watermark, text, extra limbs, deformed\n"
                     "A futuristic city skyline at night, neon lights, reflections on water, cinematic\n"
-                    "Negative: ugly, blurry, deformed, watermark, text, extra limbs, lowres, asymmetrical\n"
+                    "Negative: ugly, blurry, deformed, watermark, text, extra limbs, lowres, asymmetrical"
                 )
             }
         ]
@@ -656,6 +669,7 @@ def main():
     print()
     
     waiting_for_idea_after_same_seed = False
+    last_prompt = None  # Track the last generated prompt
 
     while True:
         if not waiting_for_idea_after_same_seed:
@@ -667,6 +681,7 @@ def main():
         elif user_input.lower() == '/reset':
             generator.reset_conversation()
             print(wrap_console_text("\nConversation history has been reset. You can start a new conversation."))
+            last_prompt = None
             continue
         elif user_input.lower() == '/new-seed':
             generator.current_seed = torch.randint(0, 2**32 - 1, (1,)).item()
@@ -705,12 +720,6 @@ def main():
         # If it's not a command, treat it as an idea
         original_idea_for_generation = user_input
 
-        # Cumulative idea logic
-        if generator.cumulative_idea:
-            generator.cumulative_idea += " + " + user_input
-        else:
-            generator.cumulative_idea = user_input
-
         # Seed logic: new seed unless /same-seed was used
         if generator.use_same_seed_next:
             print(wrap_console_text(f"\nUsing the same seed as previous: {generator.current_seed}"))
@@ -721,8 +730,8 @@ def main():
             print(wrap_console_text(f"\nNew random seed for this generation: {generator.current_seed}"))
 
         try:
-            # Use cumulative idea for prompt generation
-            enhanced_prompt, negative_prompt = generator.get_prompt_from_lmstudio(generator.cumulative_idea)
+            # Use last prompt as context for LM Studio
+            enhanced_prompt, negative_prompt = generator.get_prompt_from_lmstudio(user_input, last_prompt=last_prompt)
             print(wrap_console_text(f"\nGenerated prompt: {enhanced_prompt}"))
             if negative_prompt:
                 print(wrap_console_text(f"Negative prompt: {negative_prompt}"))
@@ -731,6 +740,7 @@ def main():
                                              num_inference_steps=generator.num_steps,
                                              guidance_scale=guidance_scale)
             generator.save_image(image, enhanced_prompt)
+            last_prompt = enhanced_prompt  # Update last prompt for next iteration
         except Exception as e:
             print(f"Error: {str(e)}")
             print("Type '/reset' to start a new conversation or 'quit' to exit.")
