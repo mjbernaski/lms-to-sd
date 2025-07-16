@@ -22,6 +22,7 @@ import json
 from diffusers import StableDiffusionXLPipeline, StableDiffusion3Pipeline, StableDiffusionPipeline, DPMSolverMultistepScheduler, EulerDiscreteScheduler, LMSDiscreteScheduler, PNDMScheduler, StableDiffusionXLImg2ImgPipeline
 from diffusers import DDIMScheduler, HeunDiscreteScheduler, UniPCMultistepScheduler, EulerAncestralDiscreteScheduler, DEISMultistepScheduler, KDPM2DiscreteScheduler, KDPM2AncestralDiscreteScheduler
 import torch
+from transformers import CLIPTokenizer
 from PIL import Image
 import io
 from datetime import datetime
@@ -70,16 +71,16 @@ class ImageGenerator:
                 {
                     "role": "system",
                     "content": (
-                        f"You are an expert prompt engineer for Stable Diffusion. For every reply, output exactly two lines and nothing else:\n"
-                        "Line 1: A concise, visual description for an image (<60 words, no explanations, no extra lines, do not include the word 'prompt', do not explain or reference the prompt, do not use quotes).\n"
-                        "Line 2: Negative: followed by a comma-separated list of visual flaws to avoid (e.g., ugly, blurry, deformed, watermark, text, extra limbs, asymmetrical eyes, etc.).\n"
-                        "Never include explanations, never reference the prompt, never use quotes, never output anything except the two lines.\n"
+                        f"You are an expert prompt engineer for Stable Diffusion. ALWAYS preserve ALL core visual elements and concepts from the user's ideas. For every reply, output exactly two lines:\n"
+                        "Line 1: A detailed, vivid visual description preserving ALL user concepts and building upon them (no explanations, no meta-references, no quotes).\n"
+                        "Line 2: Negative: followed by technical flaws to avoid (e.g., ugly, blurry, deformed, watermark, text, extra limbs, asymmetrical eyes).\n"
+                        "CRITICAL: When users build upon previous ideas, maintain ALL previous visual elements while integrating new ones. Never lose or ignore any part of their concept.\n"
                         "Examples:\n"
-                        "A photorealistic portrait of a Roman emperor, dramatic lighting, laurel wreath, marble background\n"
+                        "A photorealistic portrait of a Roman emperor, dramatic lighting, laurel wreath, marble background, intricate details\n"
                         "Negative: ugly, blurry, deformed, watermark, text, extra limbs, asymmetrical eyes\n"
-                        "A lush forest landscape at sunrise, misty atmosphere, sunbeams through trees, high detail\n"
+                        "A lush forest landscape at sunrise, misty atmosphere, sunbeams through trees, ancient ruins, high detail\n"
                         "Negative: blurry, lowres, cartoon, watermark, text, extra limbs, deformed\n"
-                        "A futuristic city skyline at night, neon lights, reflections on water, cinematic\n"
+                        "A futuristic city skyline at night, neon lights, reflections on water, flying cars, cinematic composition\n"
                         "Negative: ugly, blurry, deformed, watermark, text, extra limbs, lowres, asymmetrical\n"
                     )
                 }
@@ -113,6 +114,10 @@ class ImageGenerator:
             self.common_prompt_rules = None  # Not printed
             self.show_diff = False
             self.cumulative_idea = ""  # <-- Add cumulative idea string
+            # Initialize CLIP tokenizer for prompt truncation
+            self.clip_tokenizer = None
+            self.max_token_length = 77
+            self.use_prompt_compression = True  # Enable compression by default
             # Loading pipeline
             dtype = torch.float32
             if torch.backends.mps.is_available():
@@ -131,6 +136,18 @@ class ImageGenerator:
                 )
             self.pipeline = self.pipeline.to('cpu')
             self.device = 'cpu'
+            # Initialize CLIP tokenizer after pipeline is loaded
+            try:
+                if hasattr(self.pipeline, 'tokenizer'):
+                    self.clip_tokenizer = self.pipeline.tokenizer
+                elif hasattr(self.pipeline, 'text_encoder') and hasattr(self.pipeline.text_encoder, 'tokenizer'):
+                    self.clip_tokenizer = self.pipeline.text_encoder.tokenizer
+                else:
+                    # Fallback: load default CLIP tokenizer
+                    self.clip_tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
+            except Exception as e:
+                print(f"Warning: Could not initialize CLIP tokenizer: {e}")
+                self.clip_tokenizer = None
             # Logging setup (unchanged)
             self.logger = logging.getLogger("ImageGenerator")
             self.logger.setLevel(logging.INFO)
@@ -148,6 +165,95 @@ class ImageGenerator:
             print("Traceback:")
             print(traceback.format_exc())
             raise
+
+    def compress_prompt_with_lm(self, prompt, max_tokens=77):
+        """Use LMStudio to intelligently compress a long prompt while preserving key information."""
+        # First check if compression is needed
+        if self.clip_tokenizer:
+            tokens = self.clip_tokenizer.encode(prompt, add_special_tokens=True)
+            if len(tokens) <= max_tokens:
+                return prompt, False
+        else:
+            # Fallback check
+            if len(prompt.split()) <= max_tokens - 5:
+                return prompt, False
+        
+        print("\nCompressing prompt to fit token limit...")
+        
+        compression_prompt = f"""Compress this image prompt to under 70 words while keeping ALL key visual elements, subjects, styles, and important details. Remove only filler words and redundancy:
+
+Original: {prompt}
+
+Compressed:"""
+        
+        messages = [
+            {
+                "role": "system",
+                "content": "You are a prompt compression expert. Compress prompts while preserving all important visual elements, artistic styles, subjects, and key details. Remove only unnecessary words."
+            },
+            {
+                "role": "user",
+                "content": compression_prompt
+            }
+        ]
+        
+        try:
+            response = requests.post(
+                self.lmstudio_url,
+                json={
+                    "messages": messages,
+                    "temperature": 0.3,  # Lower temperature for more consistent compression
+                    "max_tokens": 100
+                }
+            )
+            
+            if response.status_code == 200:
+                compressed = response.json()["choices"][0]["message"]["content"].strip()
+                # Clean up the response
+                compressed = compressed.replace("Compressed:", "").strip()
+                compressed = compressed.strip('"').strip("'")
+                
+                # Verify it's actually shorter
+                if self.clip_tokenizer:
+                    compressed_tokens = self.clip_tokenizer.encode(compressed, add_special_tokens=True)
+                    if len(compressed_tokens) <= max_tokens:
+                        return compressed, True
+                
+                # If still too long, do hard truncation
+                return self.truncate_prompt(compressed, max_tokens)
+            
+        except Exception as e:
+            print(f"Compression failed: {e}")
+        
+        # Fallback to truncation
+        return self.truncate_prompt(prompt, max_tokens)
+
+    def truncate_prompt(self, prompt, max_tokens=77):
+        """Truncate prompt to fit within CLIP's token limit."""
+        if not self.clip_tokenizer:
+            # Fallback to simple word-based truncation
+            words = prompt.split()
+            if len(words) > max_tokens:
+                return ' '.join(words[:max_tokens-5]), True  # Leave some buffer
+            return prompt, False
+        
+        # Tokenize the prompt
+        tokens = self.clip_tokenizer.encode(prompt, add_special_tokens=True)
+        
+        if len(tokens) <= max_tokens:
+            return prompt, False
+        
+        # Truncate tokens and decode back to text
+        truncated_tokens = tokens[:max_tokens-1] + [tokens[-1]]  # Keep the EOS token
+        truncated_prompt = self.clip_tokenizer.decode(truncated_tokens, skip_special_tokens=True)
+        
+        # Clean up any incomplete words at the end
+        truncated_prompt = truncated_prompt.strip()
+        if truncated_prompt and not truncated_prompt[-1].isalnum():
+            # Remove trailing punctuation that might be from a cut-off word
+            truncated_prompt = truncated_prompt.rstrip('.,;:!?-_')
+        
+        return truncated_prompt, True
 
     def get_prompt_from_lmstudio(self, user_input, last_prompt=None):
         """Get an enhanced prompt from LMStudio, update dimensions if specified."""
@@ -170,10 +276,24 @@ class ImageGenerator:
             # Remove the dimension specification from the input passed to LM Studio
             original_input_for_lm = re.sub(r'\[?(\d+)x(\d+)\]?', '', user_input).strip()
         
-        # Compose the message for LM Studio
-        if last_prompt:
+        # Update cumulative idea tracking
+        if self.cumulative_idea:
+            self.cumulative_idea += f" + {original_input_for_lm}"
+        else:
+            self.cumulative_idea = original_input_for_lm
+        
+        # Compose the message for LM Studio with better context
+        if last_prompt and self.cumulative_idea:
             lm_studio_input = (
-                f"Here is the current prompt: {last_prompt}. Please rewrite or enhance it with this new idea: {original_input_for_lm}"
+                f"Current image concept: {self.cumulative_idea}. "
+                f"Previous prompt: {last_prompt}. "
+                f"New request: {original_input_for_lm}. "
+                f"Please enhance while preserving the core concept and visual elements."
+            )
+        elif self.cumulative_idea and len(self.cumulative_idea) > len(original_input_for_lm):
+            lm_studio_input = (
+                f"Building on concept: {self.cumulative_idea}. "
+                f"Focus on: {original_input_for_lm}"
             )
         else:
             lm_studio_input = original_input_for_lm
@@ -193,8 +313,8 @@ class ImageGenerator:
             "max_tokens": 120
         }
         
-        # Define junk tokens to filter out
-        JUNK_TOKENS = {"<think>", "Line 1", "<thinking>", "think", "thinking", "", "<|im_start|>", "<|im_end|>", "</think>"}
+        # Define only truly problematic tokens to filter out
+        JUNK_TOKENS = {"<think>", "<thinking>", "</think>", "<|im_start|>", "<|im_end|>", ""}
         
         try:
             response = requests.post(self.lmstudio_url, headers=headers, json=data)
@@ -215,22 +335,17 @@ class ImageGenerator:
                 # Extract prompt and negative prompt
                 prompt = None
                 negative_prompt = None
-                # Post-processing: filter out lines with explanations, quotes, or irrelevant content
+                # Gentle filtering: only remove clearly problematic lines
                 filtered_parts = []
                 for part in content_parts:
                     part_stripped = part.strip()
-                    # Skip lines with quotes, explanations, or irrelevant phrases
+                    # Only skip truly problematic lines that don't contain visual descriptions
                     if (
                         not part_stripped
-                        or '"' in part_stripped
-                        or "'" in part_stripped
-                        or 'is a famous line' in part_stripped.lower()
-                        or 'should not be associated' in part_stripped.lower()
-                        or 'explanation' in part_stripped.lower()
-                        or 'reference' in part_stripped.lower()
                         or part_stripped.lower().startswith('this prompt')
                         or part_stripped.lower().startswith('line 1:')
                         or part_stripped.lower().startswith('line 2:')
+                        or part_stripped.lower() in ['line 1', 'line 2', 'description:', 'positive:']
                     ):
                         continue
                     filtered_parts.append(part_stripped)
@@ -255,19 +370,15 @@ class ImageGenerator:
                 # If no prompt found or it's junk, use original input
                 if not prompt or prompt.lower().strip() in JUNK_TOKENS:
                     prompt = original_input_for_lm.replace("/nothink ", "")
-                # Ensure the prompt isn't too long
-                if len(prompt.split()) > 77:
-                    prompt = " ".join(prompt.split()[:77])
+                # Allow longer prompts to preserve detailed descriptions
+                if len(prompt.split()) > 150:
+                    prompt = " ".join(prompt.split()[:150])
                 # Always provide a standard negative prompt if missing
                 DEFAULT_NEGATIVE_PROMPT = "ugly, blurry, deformed, mutated, extra limbs, extra digits, watermark, signature, text, out of frame, duplicate, lowres, jpeg artifacts, asymmetrical eyes, crossed eyes, lazy eye, off-center eyes, distorted eyes, missing eyes, extra eyes, hollow eyes, unrealistic eyes, eye deformation"
                 if not negative_prompt or not negative_prompt.strip():
                     negative_prompt = DEFAULT_NEGATIVE_PROMPT
-                # Fallback: if the prompt is not visually descriptive (e.g., contains 'famous line', 'should not be associated', or is too short), use the original input
-                if (
-                    'famous line' in prompt.lower()
-                    or 'should not be associated' in prompt.lower()
-                    or len(prompt.split()) < 3
-                ):
+                # Only fallback if prompt is genuinely unusable
+                if len(prompt.split()) < 2:
                     prompt = original_input_for_lm.replace("/nothink ", "")
                 
                 # Show diff from last prompt unless reset or first prompt, and only if show_diff is set
@@ -303,16 +414,17 @@ class ImageGenerator:
             {
                 "role": "system",
                 "content": (
-                    "You are a Stable Diffusion prompt expert. For each reply, give a vivid image description under 60 words, followed by a list of flaws to avoid.\n"
-                    "Do not use quotes, explanations, or extra lines. Never reference the prompt.\n"
-                    "Begin with the image description. Then write 'Negative:' followed by a comma-separated list of visual flaws (e.g., blurry, deformed, watermark, extra limbs).\n"
+                    f"You are an expert prompt engineer for Stable Diffusion. ALWAYS preserve ALL core visual elements and concepts from the user's ideas. For every reply, output exactly two lines:\n"
+                    "Line 1: A detailed, vivid visual description preserving ALL user concepts and building upon them (no explanations, no meta-references, no quotes).\n"
+                    "Line 2: Negative: followed by technical flaws to avoid (e.g., ugly, blurry, deformed, watermark, text, extra limbs, asymmetrical eyes).\n"
+                    "CRITICAL: When users build upon previous ideas, maintain ALL previous visual elements while integrating new ones. Never lose or ignore any part of their concept.\n"
                     "Examples:\n"
-                    "A photorealistic portrait of a Roman emperor, dramatic lighting, laurel wreath, marble background\n"
+                    "A photorealistic portrait of a Roman emperor, dramatic lighting, laurel wreath, marble background, intricate details\n"
                     "Negative: ugly, blurry, deformed, watermark, text, extra limbs, asymmetrical eyes\n"
-                    "A lush forest landscape at sunrise, misty atmosphere, sunbeams through trees, high detail\n"
+                    "A lush forest landscape at sunrise, misty atmosphere, sunbeams through trees, ancient ruins, high detail\n"
                     "Negative: blurry, lowres, cartoon, watermark, text, extra limbs, deformed\n"
-                    "A futuristic city skyline at night, neon lights, reflections on water, cinematic\n"
-                    "Negative: ugly, blurry, deformed, watermark, text, extra limbs, lowres, asymmetrical"
+                    "A futuristic city skyline at night, neon lights, reflections on water, flying cars, cinematic composition\n"
+                    "Negative: ugly, blurry, deformed, watermark, text, extra limbs, lowres, asymmetrical\n"
                 )
             }
         ]
@@ -339,8 +451,32 @@ class ImageGenerator:
 
     def generate_image(self, original_idea: str, prompt, negative_prompt=None, num_inference_steps=50, guidance_scale=7.5):
         self.idea_history.append(original_idea)
-        # print(wrap_console_text(f"\nGenerating: {prompt[:80]}{'...' if len(prompt) > 80 else ''}"))
-        # print()
+        # Handle long prompts - compress or truncate
+        if self.use_prompt_compression:
+            truncated_prompt, was_modified = self.compress_prompt_with_lm(prompt, self.max_token_length)
+            if was_modified:
+                print(wrap_console_text("\n✨ Prompt was compressed to fit CLIP's 77 token limit."))
+                print(wrap_console_text(f"Using: {truncated_prompt}"))
+                print()
+        else:
+            truncated_prompt, was_truncated = self.truncate_prompt(prompt, self.max_token_length)
+            if was_truncated:
+                print(wrap_console_text("\n⚠️  Prompt was truncated to fit CLIP's 77 token limit."))
+                print(wrap_console_text(f"Using: {truncated_prompt[:80]}{'...' if len(truncated_prompt) > 80 else ''}"))
+                print()
+        
+        # Also handle negative prompt if provided
+        if negative_prompt:
+            if self.use_prompt_compression:
+                truncated_negative, neg_was_modified = self.compress_prompt_with_lm(negative_prompt, self.max_token_length)
+            else:
+                truncated_negative, neg_was_modified = self.truncate_prompt(negative_prompt, self.max_token_length)
+            if neg_was_modified:
+                print(wrap_console_text("✨ Negative prompt was also compressed/truncated."))
+                print()
+        else:
+            truncated_negative = negative_prompt
+        
         width, height = self.current_dimensions
         # Only print key parameters
         print(wrap_console_text(f"Seed: {self.current_seed} | Steps: {num_inference_steps} | Size: {width}x{height}"))
@@ -358,8 +494,8 @@ class ImageGenerator:
             # Remove Rich progress bar, just print start and end
             print("Generating image... (this may take a while)")
             image_result = self.pipeline(
-                prompt=prompt,
-                negative_prompt=negative_prompt or "Negative: ",
+                prompt=truncated_prompt,
+                negative_prompt=truncated_negative or "Negative: ",
                 num_inference_steps=num_inference_steps,
                 guidance_scale=guidance_scale,
                 height=height,
@@ -665,6 +801,8 @@ def main():
     print()
     print(wrap_console_text("Type '/same-seed' to use the same seed for the next image only"))
     print()
+    print(wrap_console_text("Type '/compress' to toggle prompt compression (default: ON)"))
+    print()
     print(wrap_console_text("Type '/quit' to exit"))
     print()
     
@@ -716,6 +854,12 @@ def main():
             except (ValueError, IndexError):
                 print(wrap_console_text("Invalid guidance scale. Usage: /guidance <number>"))
                 continue
+        elif user_input.lower() == '/compress':
+            generator.use_prompt_compression = not generator.use_prompt_compression
+            status = "ON" if generator.use_prompt_compression else "OFF"
+            mode = "compression" if generator.use_prompt_compression else "truncation"
+            print(wrap_console_text(f"\nPrompt compression toggled {status}. Using {mode} for long prompts."))
+            continue
 
         # If it's not a command, treat it as an idea
         original_idea_for_generation = user_input
